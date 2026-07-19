@@ -1,6 +1,10 @@
 <script lang="ts">
   import { ChevronUp } from 'lucide-svelte';
-  import { activeSlide, patchSlideNotes } from '../stores/editor';
+  import {
+    activeSlide,
+    closeHistoryGroup,
+    patchSlideNotes
+  } from '../stores/editor';
   const limit = 500;
 </script>
 
@@ -11,6 +15,7 @@
     maxlength={limit}
     value={$activeSlide?.notes?.text ?? ''}
     oninput={(event) => patchSlideNotes(event.currentTarget.value)}
+    onblur={() => closeHistoryGroup()}
     placeholder="Add context, talking points, or reminders…"
   ></textarea>
   <div class="character-count">

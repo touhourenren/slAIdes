@@ -1,7 +1,8 @@
 # SlAIdes
 
-SlAIdes is a desktop slide editor foundation built with Tauri 2, SvelteKit, and TypeScript.
-This repository currently implements Phase 1 (project foundation) and Phase 2 (domain model).
+SlAIdes is a desktop slide editor built with Tauri 2, SvelteKit, TypeScript, and Fabric.js.
+The current implementation covers the project/domain foundation, the in-memory canvas editor, and
+Phase 4 session Undo/Redo history.
 
 ## Requirements
 
@@ -25,4 +26,6 @@ Run `pnpm lint`, `pnpm build`, and the `rust:*` scripts before submitting change
 
 - `apps/desktop`: Tauri 2 and SvelteKit desktop shell
 - `packages/slide-schema`: canonical SlideDocument types and validation
+- `packages/editor-core`: immutable editing and generic snapshot history
+- `packages/canvas-fabric`: Fabric.js rendering and normalized canvas events
 - `docs/architecture.md`: architecture decisions and phase boundaries

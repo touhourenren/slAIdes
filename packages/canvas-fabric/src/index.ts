@@ -1,5 +1,6 @@
 import {
   ActiveSelection,
+  cache,
   Canvas,
   Control,
   controlsUtils,
@@ -20,6 +21,10 @@ import type {
   SlideSize,
   TextElement
 } from '@slaides/slide-schema';
+import {
+  clearCanvasTextMetrics,
+  measureCanvasTextAdvances
+} from './text-metrics';
 
 export type ElementChanges = Partial<{
   x: number;
@@ -39,7 +44,8 @@ export type ElementChanges = Partial<{
 export type CanvasEvent =
   | { type: 'selectionChanged'; elementIds: string[] }
   | { type: 'elementModified'; elementId: string; changes: ElementChanges }
-  | { type: 'elementTextChanged'; elementId: string; text: string };
+  | { type: 'elementTextChanged'; elementId: string; text: string }
+  | { type: 'textEditingChanged'; elementId?: string; editing: boolean };
 export type AssetSourceResolver = (asset: AssetReference) => string | undefined;
 
 export interface TextPadding {
@@ -70,6 +76,13 @@ export interface TextResizePointer {
 }
 
 export const MIN_TEXT_FONT_SIZE = 80;
+export const TEXTBOX_WRAP_BY_GRAPHEME = true;
+
+function textLayoutKey(element: TextElement): string {
+  return JSON.stringify(element, (key, value) =>
+    key === 'text' ? undefined : value
+  );
+}
 
 export const RENDER_WIDTH = 1200;
 export function domainScale(
@@ -311,6 +324,42 @@ class FramedTextbox extends Textbox {
     if (this.frameHeight !== undefined) this.height = this.frameHeight;
   }
 
+  override _measureLine(lineIndex: number) {
+    const lineInfo = super._measureLine(lineIndex);
+    const line = this._textLines[lineIndex];
+    const bounds = this.__charBounds[lineIndex];
+    if (!line?.length || !bounds || !this.isEmptyStyles(lineIndex))
+      return lineInfo;
+
+    // Fabric normally measures glyph pairs at CACHE_FONT_SIZE (400px) and
+    // scales those values down. Variable/system fonts can select different
+    // optical metrics at the real render size, so that approximation drifts
+    // farther from the painted text at every caret boundary. Measure complete
+    // prefixes with the exact font declaration used to draw this line instead.
+    const fontDeclaration = this._getFontDeclaration(
+      this.getCompleteStyleDeclaration(lineIndex, 0)
+    );
+    const advances = measureCanvasTextAdvances(
+      line,
+      fontDeclaration,
+      this.direction
+    );
+    if (!advances) return lineInfo;
+
+    for (let index = 0; index < line.length; index++) {
+      const start = advances[index];
+      const end = advances[index + 1];
+      bounds[index].left = start;
+      bounds[index].width = end - start;
+      bounds[index].kernedWidth = end - start;
+    }
+    bounds[line.length].left = advances[line.length];
+    bounds[line.length].width = 0;
+    bounds[line.length].kernedWidth = 0;
+    lineInfo.width = advances[line.length];
+    return lineInfo;
+  }
+
   setFrameHeight(height: number): void {
     this.frameHeight = Math.max(1, height);
     this.height = this.frameHeight;
@@ -322,6 +371,15 @@ class FramedTextbox extends Textbox {
     if (this.verticalAlignMode === 'middle') return top + remaining / 2;
     if (this.verticalAlignMode === 'bottom') return top + remaining;
     return top;
+  }
+
+  override _render(ctx: CanvasRenderingContext2D): void {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-this.width / 2, -this.height / 2, this.width, this.height);
+    ctx.clip();
+    super._render(ctx);
+    ctx.restore();
   }
 }
 
@@ -427,11 +485,11 @@ export class CanvasController {
     }
   >();
   private readonly textFrames = new WeakMap<Textbox, TextResizeSnapshot>();
+  private readonly textLayoutKeys = new WeakMap<Textbox, string>();
   private readonly textResizeStarts = new WeakMap<
     Textbox,
     TextResizeSnapshot
   >();
-  private readonly textClips = new WeakMap<Textbox, Rect>();
   private readonly lineGeometry = new WeakMap<
     Line,
     { x: number; y: number; x2: number; y2: number }
@@ -468,8 +526,6 @@ export class CanvasController {
           if (target instanceof FramedTextbox)
             target.setFrameHeight(frame.height);
           else target.set('height', frame.height);
-          this.updateTextClip(target, frame.width, frame.height);
-          target.setCoords();
         }
         const elementId = this.ids.get(target);
         if (elementId)
@@ -479,6 +535,20 @@ export class CanvasController {
             text: target.text
           });
       }
+    });
+    this.canvas.on('text:editing:entered', ({ target }) => {
+      options.onEvent({
+        type: 'textEditingChanged',
+        elementId: target ? this.ids.get(target) : undefined,
+        editing: true
+      });
+    });
+    this.canvas.on('text:editing:exited', ({ target }) => {
+      options.onEvent({
+        type: 'textEditingChanged',
+        elementId: target ? this.ids.get(target) : undefined,
+        editing: false
+      });
     });
   }
 
@@ -540,7 +610,19 @@ export class CanvasController {
       )) {
         const current = this.objects.get(element.id);
         if (current && !this.needsReplacement(current, element)) {
-          this.updateFabricObject(current, element);
+          // Fabric already owns the up-to-date glyph metrics, wrapped lines and
+          // caret cache while a textbox is being edited. The text-change event
+          // writes that same text to the domain model; applying the resulting
+          // store update back onto the textbox would rebuild its dimensions on
+          // every keystroke. With longer text this leaves the caret boundaries
+          // one layout behind the rendered glyphs, so the caret overlaps them.
+          const isTextEcho =
+            element.type === 'text' &&
+            current instanceof Textbox &&
+            current.isEditing &&
+            current.text === element.text &&
+            this.textLayoutKeys.get(current) === textLayoutKey(element);
+          if (!isTextEcho) this.updateFabricObject(current, element);
         } else {
           const object = await this.toFabricObject(element, assetMap);
           if (this.disposed || version !== this.renderVersion) return;
@@ -681,7 +763,14 @@ export class CanvasController {
     };
     if (!isLine) object.set(common);
     if (element.type === 'text' && object instanceof Textbox) {
-      this.ensureFontLoaded(element.fontFamily, element.fontSize);
+      this.ensureFontLoaded(
+        element.fontFamily,
+        element.fontSize,
+        element.fontWeight,
+        element.fontStyle,
+        element.text,
+        object
+      );
       const selectionStart = object.selectionStart;
       const selectionEnd = object.selectionEnd;
       if (object.text !== element.text) object.set('text', element.text);
@@ -696,6 +785,7 @@ export class CanvasController {
       if (object instanceof FramedTextbox)
         object.verticalAlignMode = element.verticalAlign;
       this.applyTextFrame(object, this.textFrameFromElement(element, scale));
+      this.textLayoutKeys.set(object, textLayoutKey(element));
       if (object.isEditing) {
         object.selectionStart = selectionStart;
         object.selectionEnd = selectionEnd;
@@ -897,7 +987,13 @@ export class CanvasController {
       strokeUniform: true
     };
     if (element.type === 'text') {
-      await this.loadFont(element.fontFamily, element.fontSize);
+      await this.loadFont(
+        element.fontFamily,
+        element.fontSize,
+        element.fontWeight,
+        element.fontStyle,
+        element.text
+      );
       const textbox = new FramedTextbox(element.text, {
         ...common,
         fontFamily: element.fontFamily,
@@ -907,11 +1003,15 @@ export class CanvasController {
         fill: element.color,
         textAlign: element.horizontalAlign,
         lineHeight: element.lineHeight,
-        splitByGrapheme: false
+        // Fabric treats an unspaced Japanese sentence as one unbreakable word
+        // unless grapheme wrapping is enabled, which makes the internal width
+        // grow beyond the authoritative document frame and offsets the caret.
+        splitByGrapheme: TEXTBOX_WRAP_BY_GRAPHEME
       });
       textbox.verticalAlignMode = element.verticalAlign;
       this.configureTextControls(textbox);
       this.applyTextFrame(textbox, this.textFrameFromElement(element, scale));
+      this.textLayoutKeys.set(textbox, textLayoutKey(element));
       return textbox;
     }
     if (element.type === 'shape') {
@@ -1053,36 +1153,11 @@ export class CanvasController {
     });
     if (textbox instanceof FramedTextbox) textbox.setFrameHeight(frame.height);
     else textbox.set('height', frame.height);
-    this.updateTextClip(textbox, frame.width, frame.height);
     textbox.setCoords();
     this.textFrames.set(textbox, {
       ...frame,
       padding: { ...frame.padding }
     });
-  }
-
-  private updateTextClip(
-    textbox: Textbox,
-    width: number,
-    height: number
-  ): void {
-    let clip = this.textClips.get(textbox);
-    if (!clip) {
-      clip = new Rect({
-        left: 0,
-        top: 0,
-        originX: 'center',
-        originY: 'center',
-        fill: '#000',
-        strokeWidth: 0,
-        selectable: false,
-        evented: false
-      });
-      this.textClips.set(textbox, clip);
-      textbox.set('clipPath', clip);
-    }
-    clip.set({ width, height, left: 0, top: 0 });
-    clip.setCoords();
   }
 
   private configureTextControls(textbox: Textbox): void {
@@ -1206,7 +1281,12 @@ export class CanvasController {
     });
   }
 
-  private fontDescriptor(fontFamily: string, fontSize: number): string {
+  private fontDescriptor(
+    fontFamily: string,
+    fontSize: number,
+    fontWeight: string | number = 'normal',
+    fontStyle = 'normal'
+  ): string {
     const cleanedFamily = fontFamily.replaceAll('"', '').trim();
     const genericFamilies = new Set([
       'system-ui',
@@ -1220,22 +1300,67 @@ export class CanvasController {
     const cssFamily = genericFamilies.has(cleanedFamily)
       ? cleanedFamily
       : `"${cleanedFamily}"`;
-    return `${Math.max(1, fontSize)}px ${cssFamily}`;
+    return `${fontStyle} ${fontWeight} ${Math.max(1, fontSize)}px ${cssFamily}`;
   }
 
-  private async loadFont(fontFamily: string, fontSize: number): Promise<void> {
+  private async loadFont(
+    fontFamily: string,
+    fontSize: number,
+    fontWeight?: string | number,
+    fontStyle?: string,
+    text = 'BESbswy'
+  ): Promise<void> {
     if (typeof document === 'undefined' || !document.fonts) return;
-    const descriptor = this.fontDescriptor(fontFamily, fontSize);
-    if (!document.fonts.check(descriptor))
-      await document.fonts.load(descriptor);
+    const descriptor = this.fontDescriptor(
+      fontFamily,
+      fontSize,
+      fontWeight,
+      fontStyle
+    );
+    if (!document.fonts.check(descriptor, text)) {
+      await document.fonts.load(descriptor, text);
+      cache.clearFontCache(fontFamily);
+      clearCanvasTextMetrics();
+    }
   }
 
-  private ensureFontLoaded(fontFamily: string, fontSize: number): void {
+  private ensureFontLoaded(
+    fontFamily: string,
+    fontSize: number,
+    fontWeight: string | number,
+    fontStyle: string,
+    text: string,
+    textbox: Textbox
+  ): void {
     if (typeof document === 'undefined' || !document.fonts) return;
-    const descriptor = this.fontDescriptor(fontFamily, fontSize);
-    if (document.fonts.check(descriptor)) return;
-    void document.fonts.load(descriptor).then(() => {
-      if (!this.disposed) this.canvas.requestRenderAll();
+    const descriptor = this.fontDescriptor(
+      fontFamily,
+      fontSize,
+      fontWeight,
+      fontStyle
+    );
+    if (document.fonts.check(descriptor, text)) return;
+    void document.fonts.load(descriptor, text).then(() => {
+      if (
+        this.disposed ||
+        textbox.fontFamily !== fontFamily ||
+        String(textbox.fontWeight) !== String(fontWeight) ||
+        textbox.fontStyle !== fontStyle
+      )
+        return;
+      cache.clearFontCache(fontFamily);
+      clearCanvasTextMetrics();
+      const frame = this.textFrames.get(textbox);
+      const selectionStart = textbox.selectionStart;
+      const selectionEnd = textbox.selectionEnd;
+      textbox.initDimensions();
+      if (frame) this.applyTextFrame(textbox, frame);
+      if (textbox.isEditing) {
+        textbox.setSelectionStart(selectionStart);
+        textbox.setSelectionEnd(selectionEnd);
+      }
+      textbox.setCoords();
+      this.canvas.requestRenderAll();
     });
   }
 }

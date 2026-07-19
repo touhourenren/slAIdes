@@ -16,7 +16,17 @@
     Type,
     Undo2
   } from 'lucide-svelte';
-  import { insertElement } from '../stores/editor';
+  import {
+    canRedoStore,
+    canUndoStore,
+    duplicateSelected,
+    insertElement,
+    redo,
+    redoLabelStore,
+    selectedElementIds,
+    undo,
+    undoLabelStore
+  } from '../stores/editor';
 
   export let chooseImage: () => void;
   export let inspectorOpen: boolean;
@@ -35,8 +45,16 @@
 <div class="main-toolbar">
   <div class="toolbar-leading">
     <div class="toolbar-group">
-      <button disabled title="Undo · Phase 4"><Undo2 /></button>
-      <button disabled title="Redo · Phase 4"><Redo2 /></button>
+      <button
+        disabled={!$canUndoStore}
+        title={$undoLabelStore ? `Undo ${$undoLabelStore}` : 'Nothing to undo'}
+        onclick={undo}><Undo2 /></button
+      >
+      <button
+        disabled={!$canRedoStore}
+        title={$redoLabelStore ? `Redo ${$redoLabelStore}` : 'Nothing to redo'}
+        onclick={redo}><Redo2 /></button
+      >
     </div>
   </div>
   <div class="toolbar-center">
@@ -72,7 +90,11 @@
       >
     </div>
     <div class="toolbar-group toolbar-secondary">
-      <button disabled title="Duplicate · Phase 4"><Copy /></button>
+      <button
+        disabled={!$selectedElementIds.length}
+        title="Duplicate selected objects"
+        onclick={duplicateSelected}><Copy /></button
+      >
       <button disabled title="Rotate menu · Future phase"><RotateCw /></button>
       <button disabled title="Crop · Future phase"><Crop /></button>
       <button disabled title="Align · Future phase"><AlignCenter /></button>

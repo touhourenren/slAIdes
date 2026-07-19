@@ -76,3 +76,20 @@ Within an active slide, `CanvasController` reconciles domain changes onto existi
 Only a slide change replaces the canvas contents. Programmatic selection changes are silent, while
 user selection, completed transforms, and text edits emit normalized events back to the document
 store. This preserves selection, text-editing focus, and object identity across property updates.
+
+## Phase 4 history architecture
+
+Phase 4 routes every document mutation through a desktop application transaction. Each committed
+transaction stores immutable before/after snapshots containing the canonical `SlideDocument`, the
+active slide ID, and selected element IDs. `editor-core` owns the UI-independent history state
+transitions; Svelte stores only orchestrate transactions and apply snapshots.
+
+The session keeps at most 100 entries. Completed canvas transforms are one entry, while consecutive
+text, property, and notes changes sharing a merge key are coalesced for 750 milliseconds or until
+focus leaves the editor. Undo followed by a new edit discards the redo branch. Selection-only,
+zoom, pan, and panel-layout changes never enter history.
+
+Session image Object URLs are retained while referenced by the current snapshot or either history
+stack, then revoked when unreachable. History remains memory-only: `.slaides` archives, autosave,
+recovery, recent files, and SQLite belong to Phase 5, while long-lived version history belongs to
+Phase 6.

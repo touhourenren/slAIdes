@@ -4,6 +4,8 @@
   import { CanvasController, zoomOffsetAtPoint } from '@slaides/canvas-fabric';
   import {
     activeSlide,
+    canvasTextEditingStore,
+    closeHistoryGroup,
     documentStore,
     patchElement,
     resolveAssetUrl,
@@ -35,8 +37,25 @@
       onEvent: (event) => {
         if (event.type === 'selectionChanged') selectElements(event.elementIds);
         else if (event.type === 'elementModified')
-          patchElement(event.elementId, event.changes);
-        else patchElement(event.elementId, { text: event.text });
+          patchElement(event.elementId, event.changes, {
+            label: 'Transform object'
+          });
+        else if (event.type === 'elementTextChanged')
+          patchElement(
+            event.elementId,
+            { text: event.text },
+            {
+              label: 'Edit text',
+              mergeKey: `canvas-text:${event.elementId}`
+            }
+          );
+        else {
+          canvasTextEditingStore.set(event.editing);
+          if (!event.editing)
+            closeHistoryGroup(
+              event.elementId ? `canvas-text:${event.elementId}` : undefined
+            );
+        }
       }
     });
     let currentSlideId: string | undefined;
@@ -108,6 +127,7 @@
       host.removeEventListener('gesturestart', gestureStart);
       host.removeEventListener('gesturechange', gestureChange);
       resizeObserver.disconnect();
+      canvasTextEditingStore.set(false);
       controller?.dispose();
     };
   });

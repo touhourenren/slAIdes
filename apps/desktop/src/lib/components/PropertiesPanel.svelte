@@ -2,13 +2,43 @@
   import type { ShapeElement, SlideElement } from '@slaides/slide-schema';
   import { clampCornerRadius } from '@slaides/editor-core';
   import { ChevronUp } from 'lucide-svelte';
-  import { patchElement, selectedElements } from '../stores/editor';
+  import {
+    closeHistoryGroup,
+    patchElement,
+    selectedElements
+  } from '../stores/editor';
 
   $: element =
     $selectedElements.length === 1 ? $selectedElements[0] : undefined;
 
   function update(changes: Partial<SlideElement>) {
-    if (element) patchElement(element.id, changes);
+    if (!element) return;
+    const keys = Object.keys(changes).sort();
+    const continuous = keys.some((key) =>
+      [
+        'x',
+        'y',
+        'width',
+        'height',
+        'rotation',
+        'opacity',
+        'text',
+        'fontSize',
+        'fill',
+        'stroke',
+        'strokeWidth',
+        'cornerRadius'
+      ].includes(key)
+    );
+    patchElement(element.id, changes, {
+      label:
+        element.type === 'text' && keys.includes('text')
+          ? 'Edit text'
+          : `Edit ${element.type}`,
+      mergeKey: continuous
+        ? `property:${element.id}:${keys.join(',')}`
+        : undefined
+    });
   }
   function number(key: string, value: string) {
     const parsed = Number(value);
@@ -39,7 +69,7 @@
   }
 </script>
 
-<div class="panel-body properties-panel">
+<div class="panel-body properties-panel" onfocusout={() => closeHistoryGroup()}>
   <div class="panel-title">
     <span>Properties</span>{#if element}<small>{element.type}</small>{/if}
   </div>

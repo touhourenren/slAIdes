@@ -18,6 +18,136 @@ export interface CreateContext {
 
 export type LayerDirection = 'front' | 'forward' | 'backward' | 'back';
 
+export interface HistoryEntry<T> {
+  id: string;
+  label: string;
+  before: T;
+  after: T;
+  createdAt: number;
+  mergeKey?: string;
+}
+
+export interface HistoryState<T> {
+  past: HistoryEntry<T>[];
+  future: HistoryEntry<T>[];
+  limit: number;
+}
+
+export interface HistoryTransition<T> {
+  history: HistoryState<T>;
+  value: T;
+  entry?: HistoryEntry<T>;
+}
+
+export interface CommitHistoryOptions {
+  label: string;
+  id?: string;
+  createdAt?: number;
+  mergeKey?: string;
+  mergeWindowMs?: number;
+}
+
+export function createHistoryState<T>(limit = 100): HistoryState<T> {
+  return { past: [], future: [], limit: Math.max(1, Math.floor(limit)) };
+}
+
+export function commitHistory<T>(
+  history: HistoryState<T>,
+  before: T,
+  after: T,
+  options: CommitHistoryOptions
+): HistoryState<T> {
+  if (Object.is(before, after)) return history;
+  const createdAt = options.createdAt ?? Date.now();
+  const mergeWindowMs = options.mergeWindowMs ?? 750;
+  const last = history.past.at(-1);
+  const canMerge =
+    Boolean(options.mergeKey) &&
+    Boolean(last) &&
+    last?.mergeKey === options.mergeKey &&
+    createdAt - (last?.createdAt ?? 0) <= mergeWindowMs;
+  const entry: HistoryEntry<T> = {
+    id: options.id ?? crypto.randomUUID(),
+    label: options.label,
+    before: canMerge && last ? last.before : before,
+    after,
+    createdAt,
+    mergeKey: options.mergeKey
+  };
+  const past = canMerge
+    ? [...history.past.slice(0, -1), entry]
+    : [...history.past, entry].slice(-history.limit);
+  return { ...history, past, future: [] };
+}
+
+export function closeHistoryGroup<T>(
+  history: HistoryState<T>,
+  mergeKey?: string
+): HistoryState<T> {
+  const last = history.past.at(-1);
+  if (!last?.mergeKey || (mergeKey && last.mergeKey !== mergeKey))
+    return history;
+  return {
+    ...history,
+    past: [...history.past.slice(0, -1), { ...last, mergeKey: undefined }]
+  };
+}
+
+export function undoHistory<T>(
+  history: HistoryState<T>,
+  current: T
+): HistoryTransition<T> {
+  const entry = history.past.at(-1);
+  if (!entry) return { history, value: current };
+  return {
+    history: {
+      ...history,
+      past: history.past.slice(0, -1),
+      future: [...history.future, entry]
+    },
+    value: entry.before,
+    entry
+  };
+}
+
+export function redoHistory<T>(
+  history: HistoryState<T>,
+  current: T
+): HistoryTransition<T> {
+  const entry = history.future.at(-1);
+  if (!entry) return { history, value: current };
+  return {
+    history: {
+      ...history,
+      past: [...history.past, entry].slice(-history.limit),
+      future: history.future.slice(0, -1)
+    },
+    value: entry.after,
+    entry
+  };
+}
+
+export function clearHistory<T>(history: HistoryState<T>): HistoryState<T> {
+  if (!history.past.length && !history.future.length) return history;
+  return createHistoryState<T>(history.limit);
+}
+
+export const canUndo = <T>(history: HistoryState<T>): boolean =>
+  history.past.length > 0;
+export const canRedo = <T>(history: HistoryState<T>): boolean =>
+  history.future.length > 0;
+
+export interface DuplicateElementsOptions {
+  offsetX?: number;
+  offsetY?: number;
+  idFactory?: (element: SlideElement, index: number) => string;
+}
+
+export interface DuplicateElementsResult {
+  document: SlideDocument;
+  elementIds: string[];
+}
+
 export function clampCornerRadius(
   width: number,
   height: number,
@@ -202,6 +332,42 @@ export function addElement(
   }));
 }
 
+export function duplicateElements(
+  document: SlideDocument,
+  slideId: string,
+  elementIds: string[],
+  options: DuplicateElementsOptions = {}
+): DuplicateElementsResult {
+  const slide = document.slides.find((item) => item.id === slideId);
+  const selected = new Set(elementIds);
+  if (!slide || !selected.size) return { document, elementIds: [] };
+  const offsetX = options.offsetX ?? 160;
+  const offsetY = options.offsetY ?? 160;
+  const originals = [...slide.elements]
+    .sort((a, b) => a.zIndex - b.zIndex)
+    .filter((element) => selected.has(element.id));
+  if (!originals.length) return { document, elementIds: [] };
+  const copies = originals.map((element, index) => {
+    const copy = clone(element);
+    copy.id = options.idFactory?.(element, index) ?? crypto.randomUUID();
+    copy.x += offsetX;
+    copy.y += offsetY;
+    copy.zIndex = slide.elements.length + index;
+    if (copy.type === 'line') {
+      copy.x2 += offsetX;
+      copy.y2 += offsetY;
+    }
+    return copy;
+  });
+  return {
+    document: updateSlide(document, slideId, (current) => ({
+      ...current,
+      elements: normalizeZ([...current.elements, ...copies])
+    })),
+    elementIds: copies.map((element) => element.id)
+  };
+}
+
 export function updateElement(
   document: SlideDocument,
   slideId: string,
@@ -258,8 +424,10 @@ export function reorderElement(
     const items = [...slide.elements].sort((a, b) => a.zIndex - b.zIndex);
     const from = items.findIndex((item) => item.id === elementId);
     if (from < 0) return slide;
+    const target = Math.max(0, Math.min(to, items.length - 1));
+    if (from === target) return slide;
     const [item] = items.splice(from, 1);
-    items.splice(Math.max(0, Math.min(to, items.length)), 0, item);
+    items.splice(target, 0, item);
     return {
       ...slide,
       elements: items.map((element, zIndex) => ({ ...element, zIndex }))
@@ -308,8 +476,9 @@ function updateSlide(
   let changed = false;
   const slides = document.slides.map((slide) => {
     if (slide.id !== slideId) return slide;
-    changed = true;
     const updated = updater(slide);
+    if (Object.is(updated, slide)) return slide;
+    changed = true;
     return {
       ...updated,
       metadata: { ...updated.metadata, updatedAt: new Date().toISOString() }

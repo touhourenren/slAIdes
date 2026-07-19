@@ -1,6 +1,11 @@
 <script lang="ts">
   import { flushSync } from 'svelte';
-  import { activeSlideId, documentStore, moveSlide } from '../stores/editor';
+  import {
+    activeSlideId,
+    documentStore,
+    moveSlide,
+    selectSlide
+  } from '../stores/editor';
   import SlideThumbnail from './SlideThumbnail.svelte';
   let dragging = -1;
   let dropTarget = -1;
@@ -47,7 +52,7 @@
         ondragover={(e) => e.preventDefault()}
         ondrop={() => drop(index)}
         ondragend={finishDrag}
-        onclick={() => activeSlideId.set(slide.id)}
+        onclick={() => selectSlide(slide.id)}
         ><span class="number">{index + 1}</span><span class="thumbnail"
           ><SlideThumbnail
             {slide}

@@ -9,10 +9,12 @@ import {
   domainToCanvas,
   normalizeLineTransform,
   normalizeObjectTransform,
+  TEXTBOX_WRAP_BY_GRAPHEME,
   unrotatedFramePosition,
   zoomOffsetAtPoint,
   zoomRenderSize
 } from '../src';
+import { measurePrefixAdvances } from '../src/text-metrics';
 
 const textSnapshot = {
   x: 100,
@@ -60,6 +62,48 @@ describe('viewport zoom', () => {
     );
     expect(size.width).toBe(2400);
     expect(size.height).toBeCloseTo(1350.03, 2);
+  });
+});
+
+describe('textbox wrapping', () => {
+  it('enables grapheme wrapping for unspaced Japanese text', () => {
+    expect(TEXTBOX_WRAP_BY_GRAPHEME).toBe(true);
+  });
+});
+
+describe('text caret metrics', () => {
+  it('measures every caret boundary from the complete shaped prefix', () => {
+    const shapedWidths = new Map([
+      ['', 0],
+      ['s', 9],
+      ['sa', 17.5],
+      ['saf', 24.25],
+      ['safd', 33.75]
+    ]);
+
+    expect(
+      measurePrefixAdvances(
+        ['s', 'a', 'f', 'd'],
+        (text) => shapedWidths.get(text) ?? 0
+      )
+    ).toEqual([0, 9, 17.5, 24.25, 33.75]);
+  });
+
+  it('keeps the terminal caret at the measured end of a long run', () => {
+    const text = [...'thefutureofproductivity'.repeat(8)];
+    const advances = measurePrefixAdvances(text, (prefix) =>
+      Number((prefix.length * 7.3 + Math.sin(prefix.length) * 0.2).toFixed(3))
+    );
+
+    expect(advances).toHaveLength(text.length + 1);
+    expect(advances.at(-1)).toBe(
+      Number((text.length * 7.3 + Math.sin(text.length) * 0.2).toFixed(3))
+    );
+    expect(
+      advances.every(
+        (value, index) => index === 0 || value > advances[index - 1]
+      )
+    ).toBe(true);
   });
 });
 

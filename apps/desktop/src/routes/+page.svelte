@@ -4,21 +4,56 @@
   import StatusBar from '$lib/components/StatusBar.svelte';
   import StudioWorkspace from '$lib/components/StudioWorkspace.svelte';
   import {
+    canvasTextEditingStore,
+    canRedoStore,
+    canUndoStore,
     deleteSelected,
     disposeAssets,
-    insertImage
+    duplicateSelected,
+    insertImage,
+    redo,
+    undo
   } from '$lib/stores/editor';
+  import { get } from 'svelte/store';
 
   let fileInput: HTMLInputElement;
   const chooseImage = () => fileInput.click();
 
   onMount(() => {
     const key = (event: KeyboardEvent) => {
+      const target = event.target;
+      const isEditingField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable) ||
+        get(canvasTextEditingStore);
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!isEditingField && modifier && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          if (get(canRedoStore)) redo();
+        } else if (get(canUndoStore)) undo();
+        return;
+      }
+      if (
+        !isEditingField &&
+        event.ctrlKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === 'y'
+      ) {
+        event.preventDefault();
+        if (get(canRedoStore)) redo();
+        return;
+      }
+      if (!isEditingField && modifier && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        duplicateSelected();
+        return;
+      }
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
-        !(event.target instanceof HTMLInputElement) &&
-        !(event.target instanceof HTMLTextAreaElement) &&
-        !(event.target instanceof HTMLSelectElement)
+        !isEditingField
       ) {
         event.preventDefault();
         deleteSelected();

@@ -5,11 +5,20 @@ import {
   addSlide,
   clampCornerRadius,
   createElement,
+  createHistoryState,
   createSlide,
+  canRedo,
+  canUndo,
+  clearHistory,
+  closeHistoryGroup,
+  commitHistory,
+  duplicateElements,
   moveElementLayer,
   removeElement,
   removeSlide,
   reorderSlide,
+  redoHistory,
+  undoHistory,
   updateElement,
   updateSlideNotes
 } from '../src';
@@ -96,5 +105,80 @@ describe('editor-core', () => {
     expect(clampCornerRadius(4000, 2000, 420)).toBe(420);
     expect(clampCornerRadius(4000, 2000, 5000)).toBe(1000);
     expect(clampCornerRadius(4000, 2000, -20)).toBe(0);
+  });
+
+  it('commits, undoes, redoes, and clears snapshot history', () => {
+    const empty = createHistoryState<number>();
+    const committed = commitHistory(empty, 1, 2, {
+      id: 'first',
+      label: 'Change value',
+      createdAt: 100
+    });
+    expect(canUndo(committed)).toBe(true);
+    expect(canRedo(committed)).toBe(false);
+    const undone = undoHistory(committed, 2);
+    expect(undone.value).toBe(1);
+    expect(undone.entry?.label).toBe('Change value');
+    expect(canRedo(undone.history)).toBe(true);
+    expect(redoHistory(undone.history, 1).value).toBe(2);
+    expect(clearHistory(committed)).toEqual(createHistoryState());
+  });
+
+  it('coalesces matching edits and closes merge groups', () => {
+    let history = createHistoryState<number>();
+    history = commitHistory(history, 1, 2, {
+      id: 'first',
+      label: 'Edit text',
+      mergeKey: 'text:one',
+      createdAt: 100
+    });
+    history = commitHistory(history, 2, 3, {
+      id: 'second',
+      label: 'Edit text',
+      mergeKey: 'text:one',
+      createdAt: 500
+    });
+    expect(history.past).toHaveLength(1);
+    expect(history.past[0]).toMatchObject({ before: 1, after: 3 });
+    history = closeHistoryGroup(history, 'text:one');
+    history = commitHistory(history, 3, 4, {
+      id: 'third',
+      label: 'Edit text',
+      mergeKey: 'text:one',
+      createdAt: 600
+    });
+    expect(history.past).toHaveLength(2);
+  });
+
+  it('invalidates redo, skips no-ops, and enforces the history limit', () => {
+    let history = createHistoryState<number>(2);
+    expect(commitHistory(history, 1, 1, { label: 'No-op' })).toBe(history);
+    history = commitHistory(history, 0, 1, { id: '1', label: 'One' });
+    history = commitHistory(history, 1, 2, { id: '2', label: 'Two' });
+    history = commitHistory(history, 2, 3, { id: '3', label: 'Three' });
+    expect(history.past.map((entry) => entry.id)).toEqual(['2', '3']);
+    const undone = undoHistory(history, 3);
+    const branched = commitHistory(undone.history, 2, 4, {
+      id: '4',
+      label: 'Branch'
+    });
+    expect(branched.future).toHaveLength(0);
+  });
+
+  it('duplicates selected elements with new ids and offsets', () => {
+    const original = createSampleDocument();
+    const slide = original.slides[0];
+    const source = slide.elements[0];
+    const result = duplicateElements(original, slide.id, [source.id], {
+      idFactory: () => '018f47a2-5b6c-7d8e-9f01-23456789abe9'
+    });
+    expect(original.slides[0].elements).toHaveLength(1);
+    expect(result.elementIds).toEqual(['018f47a2-5b6c-7d8e-9f01-23456789abe9']);
+    expect(result.document.slides[0].elements[1]).toMatchObject({
+      id: '018f47a2-5b6c-7d8e-9f01-23456789abe9',
+      x: source.x + 160,
+      y: source.y + 160,
+      zIndex: 1
+    });
   });
 });
