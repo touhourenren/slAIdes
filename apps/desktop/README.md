@@ -21,3 +21,8 @@ Undo/Redo shortcuts are `Cmd/Ctrl + Z`, `Cmd/Ctrl + Shift + Z`, and `Ctrl + Y`. 
 Fabric text editing retain their native text-level Undo behavior. `Cmd/Ctrl + D` duplicates selected
 objects. History is intentionally discarded when the app closes. Saved documents and crash
 recovery drafts are restored as fresh editing sessions; only Save and Save As update formal files.
+
+The interface and newly inserted text use bundled IBM Plex Sans, with Noto Sans JP as the Japanese
+fallback. Object and slide clipboards support `Cmd/Ctrl + C/X/V` and context menus. Text elements
+store character ranges for mixed font family, size, weight, style, and color; the Design panel also
+provides title, heading, subheading, body, and caption size presets.

@@ -7,8 +7,11 @@ import type {
   SlideDocument,
   SlideElement,
   SlideElementType,
-  TextElement
+  TextElement,
+  TextStyleAttributes,
+  TextStyleRange
 } from '@slaides/slide-schema';
+import { splitTextGraphemes } from '@slaides/slide-schema';
 
 export interface CreateContext {
   id?: string;
@@ -148,6 +151,10 @@ export interface DuplicateElementsResult {
   elementIds: string[];
 }
 
+export interface PasteElementsOptions extends DuplicateElementsOptions {
+  zIndexStart?: number;
+}
+
 export function clampCornerRadius(
   width: number,
   height: number,
@@ -190,7 +197,7 @@ export function createElement(
       ...common,
       type,
       text: 'Double-click to edit',
-      fontFamily: 'system-ui',
+      fontFamily: 'IBM Plex Sans Variable',
       fontSize: 360,
       fontWeight: 600,
       fontStyle: 'normal',
@@ -200,7 +207,8 @@ export function createElement(
       lineHeight: 1.2,
       letterSpacing: 0,
       autoFit: 'none',
-      padding: { top: 80, right: 80, bottom: 80, left: 80 }
+      padding: { top: 80, right: 80, bottom: 80, left: 80 },
+      textStyles: []
     } satisfies TextElement;
   if (type === 'image')
     return {
@@ -234,6 +242,125 @@ export function createElement(
     stroke: '#6E85A8',
     strokeWidth: 8
   } satisfies ShapeElement;
+}
+
+const styleKeys: Array<keyof TextStyleAttributes> = [
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'color'
+];
+
+function compactStyle(style: TextStyleAttributes): TextStyleAttributes {
+  return Object.fromEntries(
+    styleKeys.flatMap((key) =>
+      style[key] === undefined ? [] : [[key, style[key]]]
+    )
+  ) as TextStyleAttributes;
+}
+
+export function applyTextStyleRange(
+  ranges: TextStyleRange[],
+  start: number,
+  end: number,
+  changes: TextStyleAttributes
+): TextStyleRange[] {
+  const safeStart = Math.max(0, Math.floor(start));
+  const safeEnd = Math.max(safeStart, Math.floor(end));
+  if (safeEnd === safeStart) return ranges;
+  const boundaries = new Set([safeStart, safeEnd]);
+  for (const range of ranges) {
+    boundaries.add(range.start);
+    boundaries.add(range.end);
+  }
+  const points = [...boundaries].sort((left, right) => left - right);
+  const result: TextStyleRange[] = [];
+  for (let index = 0; index < points.length - 1; index++) {
+    const segmentStart = points[index];
+    const segmentEnd = points[index + 1];
+    const existing = ranges.find(
+      (range) => range.start <= segmentStart && range.end >= segmentEnd
+    );
+    const overlaps = segmentStart < safeEnd && segmentEnd > safeStart;
+    const style = compactStyle({
+      ...(existing ? compactStyle(existing) : {}),
+      ...(overlaps ? changes : {})
+    });
+    if (!Object.keys(style).length) continue;
+    const previous = result.at(-1);
+    if (
+      previous &&
+      previous.end === segmentStart &&
+      JSON.stringify(compactStyle(previous)) === JSON.stringify(style)
+    )
+      previous.end = segmentEnd;
+    else result.push({ start: segmentStart, end: segmentEnd, ...style });
+  }
+  return result;
+}
+
+export function clearTextStyleProperties(
+  ranges: TextStyleRange[],
+  keys: Array<keyof TextStyleAttributes>
+): TextStyleRange[] {
+  return ranges.flatMap((range) => {
+    const style = compactStyle(range);
+    for (const key of keys) delete style[key];
+    return Object.keys(style).length
+      ? [{ start: range.start, end: range.end, ...style }]
+      : [];
+  });
+}
+
+export function rebaseTextStyleRanges(
+  ranges: TextStyleRange[],
+  previousText: string,
+  nextText: string
+): TextStyleRange[] {
+  const previous = splitTextGraphemes(previousText);
+  const next = splitTextGraphemes(nextText);
+  let prefix = 0;
+  while (
+    prefix < previous.length &&
+    prefix < next.length &&
+    previous[prefix] === next[prefix]
+  )
+    prefix++;
+  let suffix = 0;
+  while (
+    suffix < previous.length - prefix &&
+    suffix < next.length - prefix &&
+    previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]
+  )
+    suffix++;
+  const styles = previous.map((_, index) => {
+    const range = ranges.find(
+      (candidate) => candidate.start <= index && candidate.end > index
+    );
+    return range ? compactStyle(range) : {};
+  });
+  const inherited = compactStyle(styles[prefix] ?? styles[prefix - 1] ?? {});
+  const insertedLength = next.length - prefix - suffix;
+  const rebased = [
+    ...styles.slice(0, prefix),
+    ...Array.from({ length: insertedLength }, () => inherited),
+    ...styles.slice(previous.length - suffix)
+  ];
+  const result: TextStyleRange[] = [];
+  for (let index = 0; index < rebased.length; index++) {
+    const style = compactStyle(rebased[index]);
+    if (!Object.keys(style).length) continue;
+    const previousRange = result.at(-1);
+    if (
+      previousRange &&
+      previousRange.end === index &&
+      JSON.stringify(compactStyle(previousRange)) === JSON.stringify(style)
+    )
+      previousRange.end++;
+    else result.push({ start: index, end: index + 1, ...style });
+  }
+  return result;
 }
 
 export function createSlide(context: CreateContext = {}): Slide {
@@ -366,6 +493,79 @@ export function duplicateElements(
     })),
     elementIds: copies.map((element) => element.id)
   };
+}
+
+export function pasteElements(
+  document: SlideDocument,
+  slideId: string,
+  elements: SlideElement[],
+  options: PasteElementsOptions = {}
+): DuplicateElementsResult {
+  const slide = document.slides.find((item) => item.id === slideId);
+  if (!slide || !elements.length) return { document, elementIds: [] };
+  const offsetX = options.offsetX ?? 160;
+  const offsetY = options.offsetY ?? 160;
+  const idMap = new Map(
+    elements.map((element, index) => [
+      element.id,
+      options.idFactory?.(element, index) ?? crypto.randomUUID()
+    ])
+  );
+  const pasted = [...elements]
+    .sort((left, right) => left.zIndex - right.zIndex)
+    .map((element, index) => {
+      const copy = clone(element);
+      copy.id = idMap.get(element.id)!;
+      copy.x += offsetX;
+      copy.y += offsetY;
+      copy.zIndex = (options.zIndexStart ?? slide.elements.length) + index;
+      if (copy.groupId) copy.groupId = idMap.get(copy.groupId);
+      if (copy.type === 'group')
+        copy.childIds = copy.childIds.flatMap((childId) =>
+          idMap.has(childId) ? [idMap.get(childId)!] : []
+        );
+      if (copy.type === 'line') {
+        copy.x2 += offsetX;
+        copy.y2 += offsetY;
+      }
+      return copy;
+    });
+  return {
+    document: updateSlide(document, slideId, (current) => ({
+      ...current,
+      elements: normalizeZ([...current.elements, ...pasted])
+    })),
+    elementIds: pasted.map((element) => element.id)
+  };
+}
+
+export function pasteSlide(
+  document: SlideDocument,
+  source: Slide,
+  index = document.slides.length,
+  context: CreateContext = {}
+): { document: SlideDocument; slideId: string } {
+  const copy = clone(source);
+  const timestamp = now(context.now);
+  copy.id = id(context.id);
+  copy.name = `${source.name ?? 'Slide'} copy`;
+  copy.metadata = { createdAt: timestamp, updatedAt: timestamp };
+  const elementIdMap = new Map(
+    copy.elements.map((element) => [element.id, crypto.randomUUID()])
+  );
+  copy.elements = copy.elements.map((element) => ({
+    ...element,
+    id: elementIdMap.get(element.id)!,
+    groupId: element.groupId ? elementIdMap.get(element.groupId) : undefined,
+    ...(element.type === 'group'
+      ? {
+          childIds: element.childIds.flatMap((childId) =>
+            elementIdMap.has(childId) ? [elementIdMap.get(childId)!] : []
+          )
+        }
+      : {})
+  }));
+  return { document: addSlide(document, copy, index), slideId: copy.id };
 }
 
 export function updateElement(

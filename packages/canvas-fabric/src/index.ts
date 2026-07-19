@@ -12,15 +12,19 @@ import {
   Point,
   Rect,
   Textbox,
-  Triangle
+  Triangle,
+  util
 } from 'fabric';
+import type { TextStyle, TextStyleDeclaration } from 'fabric';
 import type {
   AssetReference,
   Slide,
   SlideElement,
   SlideSize,
-  TextElement
+  TextElement,
+  TextStyleRange
 } from '@slaides/slide-schema';
+import { splitTextGraphemes } from '@slaides/slide-schema';
 import {
   clearCanvasTextMetrics,
   measureCanvasTextAdvances
@@ -40,11 +44,29 @@ export type ElementChanges = Partial<{
   strokeWidth: number;
   fontSize: number;
   padding: TextPadding;
+  textStyles: TextStyleRange[];
 }>;
 export type CanvasEvent =
   | { type: 'selectionChanged'; elementIds: string[] }
   | { type: 'elementModified'; elementId: string; changes: ElementChanges }
-  | { type: 'elementTextChanged'; elementId: string; text: string }
+  | {
+      type: 'elementTextChanged';
+      elementId: string;
+      text: string;
+      textStyles: TextStyleRange[];
+    }
+  | {
+      type: 'textSelectionChanged';
+      elementId: string;
+      start: number;
+      end: number;
+    }
+  | {
+      type: 'contextMenuRequested';
+      elementId?: string;
+      clientX: number;
+      clientY: number;
+    }
   | { type: 'textEditingChanged'; elementId?: string; editing: boolean };
 export type AssetSourceResolver = (asset: AssetReference) => string | undefined;
 
@@ -81,6 +103,121 @@ export const TEXTBOX_WRAP_BY_GRAPHEME = true;
 function textLayoutKey(element: TextElement): string {
   return JSON.stringify(element, (key, value) =>
     key === 'text' ? undefined : value
+  );
+}
+
+function toFabricTextStyle(
+  range: TextStyleRange,
+  scale: number
+): TextStyleDeclaration {
+  const { color, fontSize } = range;
+  return {
+    ...(range.fontFamily === undefined ? {} : { fontFamily: range.fontFamily }),
+    ...(range.fontWeight === undefined ? {} : { fontWeight: range.fontWeight }),
+    ...(range.fontStyle === undefined ? {} : { fontStyle: range.fontStyle }),
+    ...(fontSize === undefined
+      ? {}
+      : { fontSize: domainToCanvas(fontSize, scale) }),
+    ...(color === undefined ? {} : { fill: color })
+  };
+}
+
+function isExplicitNewline(grapheme: string): boolean {
+  return grapheme === '\n' || grapheme === '\r\n';
+}
+
+export function domainTextStylesToFabric(
+  ranges: TextStyleRange[] | undefined,
+  text: string,
+  scale: number
+): TextStyle {
+  const styles: TextStyle = {};
+  let lineIndex = 0;
+  let characterIndex = 0;
+  for (const [domainIndex, grapheme] of splitTextGraphemes(text).entries()) {
+    if (isExplicitNewline(grapheme)) {
+      lineIndex++;
+      characterIndex = 0;
+      continue;
+    }
+    const range = (ranges ?? []).find(
+      (candidate) =>
+        candidate.start <= domainIndex && candidate.end > domainIndex
+    );
+    if (range) {
+      styles[lineIndex] ??= {};
+      styles[lineIndex][characterIndex] = toFabricTextStyle(range, scale);
+    }
+    characterIndex++;
+  }
+  return styles;
+}
+
+function normalizeFabricTextStyle(
+  style: TextStyleDeclaration | undefined,
+  scale: number
+): Omit<TextStyleRange, 'start' | 'end'> | undefined {
+  if (!style) return undefined;
+  const normalized = {
+    ...(typeof style.fontFamily === 'string'
+      ? { fontFamily: style.fontFamily }
+      : {}),
+    ...(typeof style.fontSize === 'number'
+      ? { fontSize: canvasToDomain(style.fontSize, scale) }
+      : {}),
+    ...(style.fontWeight !== undefined &&
+    Number.isFinite(Number(style.fontWeight))
+      ? { fontWeight: Number(style.fontWeight) }
+      : {}),
+    ...(style.fontStyle === 'normal' || style.fontStyle === 'italic'
+      ? { fontStyle: style.fontStyle }
+      : {}),
+    ...(typeof style.fill === 'string' ? { color: style.fill } : {})
+  };
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+export function fabricTextStylesToDomainFromStyles(
+  styles: TextStyle,
+  text: string,
+  scale: number
+): TextStyleRange[] {
+  const ranges: TextStyleRange[] = [];
+  let lineIndex = 0;
+  let characterIndex = 0;
+  for (const [domainIndex, grapheme] of splitTextGraphemes(text).entries()) {
+    if (isExplicitNewline(grapheme)) {
+      lineIndex++;
+      characterIndex = 0;
+      continue;
+    }
+    const style = normalizeFabricTextStyle(
+      styles[lineIndex]?.[characterIndex],
+      scale
+    );
+    characterIndex++;
+    if (!style) continue;
+    const previous = ranges.at(-1);
+    if (
+      previous &&
+      previous.end === domainIndex &&
+      JSON.stringify({ ...previous, start: undefined, end: undefined }) ===
+        JSON.stringify(style)
+    )
+      previous.end = domainIndex + 1;
+    else ranges.push({ start: domainIndex, end: domainIndex + 1, ...style });
+  }
+  return ranges;
+}
+
+function fabricTextStylesToDomain(
+  textbox: Textbox,
+  scale: number
+): TextStyleRange[] {
+  return fabricTextStylesToDomainFromStyles(
+    textbox.styles,
+    textbox.text,
+    scale
   );
 }
 
@@ -328,35 +465,48 @@ class FramedTextbox extends Textbox {
     const lineInfo = super._measureLine(lineIndex);
     const line = this._textLines[lineIndex];
     const bounds = this.__charBounds[lineIndex];
-    if (!line?.length || !bounds || !this.isEmptyStyles(lineIndex))
-      return lineInfo;
+    if (!line?.length || !bounds) return lineInfo;
 
     // Fabric normally measures glyph pairs at CACHE_FONT_SIZE (400px) and
     // scales those values down. Variable/system fonts can select different
     // optical metrics at the real render size, so that approximation drifts
     // farther from the painted text at every caret boundary. Measure complete
     // prefixes with the exact font declaration used to draw this line instead.
-    const fontDeclaration = this._getFontDeclaration(
-      this.getCompleteStyleDeclaration(lineIndex, 0)
-    );
-    const advances = measureCanvasTextAdvances(
-      line,
-      fontDeclaration,
-      this.direction
-    );
-    if (!advances) return lineInfo;
-
-    for (let index = 0; index < line.length; index++) {
-      const start = advances[index];
-      const end = advances[index + 1];
-      bounds[index].left = start;
-      bounds[index].width = end - start;
-      bounds[index].kernedWidth = end - start;
+    let runStart = 0;
+    let lineOffset = 0;
+    while (runStart < line.length) {
+      const fontDeclaration = this._getFontDeclaration(
+        this.getCompleteStyleDeclaration(lineIndex, runStart)
+      );
+      let runEnd = runStart + 1;
+      while (
+        runEnd < line.length &&
+        this._getFontDeclaration(
+          this.getCompleteStyleDeclaration(lineIndex, runEnd)
+        ) === fontDeclaration
+      )
+        runEnd++;
+      const advances = measureCanvasTextAdvances(
+        line.slice(runStart, runEnd),
+        fontDeclaration,
+        this.direction
+      );
+      if (!advances) return lineInfo;
+      for (let index = runStart; index < runEnd; index++) {
+        const localIndex = index - runStart;
+        const start = lineOffset + advances[localIndex];
+        const end = lineOffset + advances[localIndex + 1];
+        bounds[index].left = start;
+        bounds[index].width = end - start;
+        bounds[index].kernedWidth = end - start;
+      }
+      lineOffset += advances[advances.length - 1];
+      runStart = runEnd;
     }
-    bounds[line.length].left = advances[line.length];
+    bounds[line.length].left = lineOffset;
     bounds[line.length].width = 0;
     bounds[line.length].kernedWidth = 0;
-    lineInfo.width = advances[line.length];
+    lineInfo.width = lineOffset;
     return lineInfo;
   }
 
@@ -490,6 +640,10 @@ export class CanvasController {
     Textbox,
     TextResizeSnapshot
   >();
+  private readonly textStyleResizeStarts = new WeakMap<
+    Textbox,
+    ReturnType<typeof util.stylesToArray>
+  >();
   private readonly lineGeometry = new WeakMap<
     Line,
     { x: number; y: number; x2: number; y2: number }
@@ -532,9 +686,38 @@ export class CanvasController {
           options.onEvent({
             type: 'elementTextChanged',
             elementId,
-            text: target.text
+            text: target.text,
+            textStyles: fabricTextStylesToDomain(
+              target,
+              domainScale(this.options.size)
+            )
           });
       }
+    });
+    this.canvas.on('text:selection:changed', ({ target }) => {
+      if (!(target instanceof Textbox)) return;
+      const elementId = this.ids.get(target);
+      if (!elementId) return;
+      options.onEvent({
+        type: 'textSelectionChanged',
+        elementId,
+        start: target.selectionStart,
+        end: target.selectionEnd
+      });
+    });
+    this.canvas.on('contextmenu', ({ target, e }) => {
+      const event = e as MouseEvent;
+      const elementId = target ? this.ids.get(target) : undefined;
+      if (elementId && !this.requestedSelection.includes(elementId)) {
+        this.setSelection([elementId]);
+        options.onEvent({ type: 'selectionChanged', elementIds: [elementId] });
+      }
+      options.onEvent({
+        type: 'contextMenuRequested',
+        elementId,
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
     });
     this.canvas.on('text:editing:entered', ({ target }) => {
       options.onEvent({
@@ -782,6 +965,10 @@ export class CanvasController {
         textAlign: element.horizontalAlign,
         lineHeight: element.lineHeight
       });
+      object.set(
+        'styles',
+        domainTextStylesToFabric(element.textStyles, element.text, scale)
+      );
       if (object instanceof FramedTextbox)
         object.verticalAlignMode = element.verticalAlign;
       this.applyTextFrame(object, this.textFrameFromElement(element, scale));
@@ -917,7 +1104,8 @@ export class CanvasController {
           height: canvasToDomain(frame.height, scale),
           rotation: frame.rotation,
           fontSize: canvasToDomain(frame.fontSize, scale),
-          padding: this.paddingToDomain(frame.padding, scale)
+          padding: this.paddingToDomain(frame.padding, scale),
+          textStyles: fabricTextStylesToDomain(object, scale)
         }
       });
       return;
@@ -994,6 +1182,16 @@ export class CanvasController {
         element.fontStyle,
         element.text
       );
+      for (const range of element.textStyles ?? [])
+        await this.loadFont(
+          range.fontFamily ?? element.fontFamily,
+          range.fontSize ?? element.fontSize,
+          range.fontWeight ?? element.fontWeight,
+          range.fontStyle ?? element.fontStyle,
+          splitTextGraphemes(element.text)
+            .slice(range.start, range.end)
+            .join('')
+        );
       const textbox = new FramedTextbox(element.text, {
         ...common,
         fontFamily: element.fontFamily,
@@ -1003,6 +1201,11 @@ export class CanvasController {
         fill: element.color,
         textAlign: element.horizontalAlign,
         lineHeight: element.lineHeight,
+        styles: domainTextStylesToFabric(
+          element.textStyles,
+          element.text,
+          scale
+        ),
         // Fabric treats an unspaced Japanese sentence as one unbreakable word
         // unless grapheme wrapping is enabled, which makes the internal width
         // grow beyond the authoritative document frame and offsets the caret.
@@ -1186,6 +1389,12 @@ export class CanvasController {
             rotation: transform.target.angle ?? frame.rotation,
             padding: { ...frame.padding }
           });
+          this.textStyleResizeStarts.set(
+            transform.target,
+            structuredClone(
+              util.stylesToArray(transform.target.styles, transform.target.text)
+            )
+          );
           return true;
         },
         actionHandler: (_event, transform, x, y) => {
@@ -1193,13 +1402,34 @@ export class CanvasController {
           const start = this.textResizeStarts.get(transform.target);
           if (!start) return false;
           const frame = calculateTextResize(start, { x, y }, handle);
+          const startStyles = this.textStyleResizeStarts.get(transform.target);
+          if (startStyles && ['tl', 'tr', 'bl', 'br'].includes(handle)) {
+            const scale = frame.fontSize / start.fontSize;
+            transform.target.set(
+              'styles',
+              util.stylesFromArray(
+                startStyles.map((range) => ({
+                  ...range,
+                  style: {
+                    ...range.style,
+                    ...(typeof range.style.fontSize === 'number'
+                      ? { fontSize: range.style.fontSize * scale }
+                      : {})
+                  }
+                })),
+                transform.target.text
+              )
+            );
+          }
           this.applyTextFrame(transform.target, frame);
           this.canvas.requestRenderAll();
           return true;
         },
         mouseUpHandler: (_event, transform) => {
-          if (transform.target instanceof Textbox)
+          if (transform.target instanceof Textbox) {
             this.textResizeStarts.delete(transform.target);
+            this.textStyleResizeStarts.delete(transform.target);
+          }
           return true;
         }
       });

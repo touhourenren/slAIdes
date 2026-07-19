@@ -81,6 +81,22 @@ export interface TextElement extends BaseSlideElement {
   letterSpacing: number;
   autoFit: 'none' | 'shrink' | 'resize-height';
   padding: { top: number; right: number; bottom: number; left: number };
+  textStyles?: TextStyleRange[];
+}
+
+export interface TextStyleAttributes {
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  fontStyle?: 'normal' | 'italic';
+  color?: string;
+}
+
+export interface TextStyleRange extends TextStyleAttributes {
+  /** Grapheme-based start index, inclusive. */
+  start: number;
+  /** Grapheme-based end index, exclusive. */
+  end: number;
 }
 
 export interface ImageElement extends BaseSlideElement {

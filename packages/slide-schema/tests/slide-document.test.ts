@@ -4,7 +4,8 @@ import {
   createSampleDocument,
   deserializeSlideDocument,
   parseSlideDocument,
-  serializeSlideDocument
+  serializeSlideDocument,
+  splitTextGraphemes
 } from '../src';
 import type { BaseSlideElement, SlideElement } from '../src';
 
@@ -82,6 +83,9 @@ function documentWithAllElementTypes() {
 }
 
 describe('SlideDocumentSchema', () => {
+  it('uses grapheme indexes for rich-text ranges', () => {
+    expect(splitTextGraphemes('A👨‍👩‍👧‍👦か\u3099')).toEqual(['A', '👨‍👩‍👧‍👦', 'か\u3099']);
+  });
   it('validates a sample document containing all element types', () => {
     const document = documentWithAllElementTypes();
     const result = SlideDocumentSchema.safeParse(document);
@@ -144,11 +148,41 @@ describe('SlideDocumentSchema', () => {
 
   it('preserves document identity through JSON serialization', () => {
     const original = documentWithAllElementTypes();
+    const text = original.slides[0].elements[0];
+    if (text.type === 'text')
+      text.textStyles = [
+        {
+          start: 0,
+          end: 3,
+          fontFamily: 'IBM Plex Sans Variable',
+          fontSize: 640,
+          fontStyle: 'italic',
+          color: '#FF0000'
+        }
+      ];
     const restored = deserializeSlideDocument(serializeSlideDocument(original));
     expect(restored).toEqual(original);
   });
 
   it('rejects malformed JSON before schema validation', () => {
     expect(() => deserializeSlideDocument('{')).toThrow(SyntaxError);
+  });
+
+  it('migrates schema v1 text elements to rich-text capable schema v2', () => {
+    const legacy = structuredClone(createSampleDocument()) as unknown as Record<
+      string,
+      unknown
+    >;
+    legacy.schemaVersion = 1;
+    const slides = legacy.slides as Array<{
+      elements: Array<Record<string, unknown>>;
+    }>;
+    delete slides[0].elements[0].textStyles;
+    const migrated = parseSlideDocument(legacy);
+    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.slides[0].elements[0]).toMatchObject({
+      type: 'text',
+      textStyles: []
+    });
   });
 });

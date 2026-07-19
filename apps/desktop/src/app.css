@@ -27,13 +27,12 @@
   --radius-lg: 12px;
   --radius-xl: 14px;
   --font-ui:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
-    'Helvetica Neue', 'Noto Sans JP Variable', 'Noto Sans JP', 'Hiragino Sans',
-    'Yu Gothic UI', Meiryo, sans-serif;
+    'IBM Plex Sans Variable', 'IBM Plex Sans', 'Noto Sans JP Variable',
+    'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic UI', Meiryo, sans-serif;
   font-family: var(--font-ui);
   color: var(--color-text-primary);
   background: var(--color-app-bg);
-  font-synthesis: none;
+  font-synthesis: style;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1195,6 +1194,36 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 9px;
+}
+
+.selection-note {
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.text-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0 10px;
+}
+
+.text-presets button {
+  min-height: 28px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-control-bg);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.text-presets button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 .property-grid label,

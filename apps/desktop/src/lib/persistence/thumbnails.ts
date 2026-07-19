@@ -1,4 +1,9 @@
-import type { AssetReference, SlideDocument } from '@slaides/slide-schema';
+import type {
+  AssetReference,
+  SlideDocument,
+  TextElement
+} from '@slaides/slide-schema';
+import { splitTextGraphemes } from '@slaides/slide-schema';
 import type { BinaryEntry } from './project-repository';
 
 export interface ThumbnailRenderOptions {
@@ -18,6 +23,48 @@ const xml = (value: string) =>
     .replaceAll('<', '&lt;')
     .replaceAll('"', '&quot;');
 
+function richText(element: TextElement): string {
+  const graphemes = splitTextGraphemes(element.text);
+  const segments: Array<{
+    text: string;
+    fontFamily: string;
+    fontSize: number;
+    fontWeight: number;
+    fontStyle: 'normal' | 'italic';
+    color: string;
+  }> = [];
+  for (let index = 0; index < graphemes.length; index++) {
+    const range = element.textStyles?.find(
+      (style) => style.start <= index && style.end > index
+    );
+    const segment = {
+      text: graphemes[index],
+      fontFamily: range?.fontFamily ?? element.fontFamily,
+      fontSize: range?.fontSize ?? element.fontSize,
+      fontWeight: range?.fontWeight ?? element.fontWeight,
+      fontStyle: range?.fontStyle ?? element.fontStyle,
+      color: range?.color ?? element.color
+    };
+    const previous = segments.at(-1);
+    if (
+      previous &&
+      previous.fontFamily === segment.fontFamily &&
+      previous.fontSize === segment.fontSize &&
+      previous.fontWeight === segment.fontWeight &&
+      previous.fontStyle === segment.fontStyle &&
+      previous.color === segment.color
+    )
+      previous.text += segment.text;
+    else segments.push(segment);
+  }
+  return segments
+    .map(
+      (segment) =>
+        `<tspan font-family="${xml(segment.fontFamily)}" font-size="${segment.fontSize}" font-weight="${segment.fontWeight}" font-style="${segment.fontStyle}" fill="${xml(segment.color)}">${xml(segment.text)}</tspan>`
+    )
+    .join('');
+}
+
 function slideSvg(
   document: SlideDocument,
   slideIndex: number,
@@ -31,7 +78,7 @@ function slideSvg(
       const transform = `rotate(${element.rotation} ${element.x + element.width / 2} ${element.y + element.height / 2})`;
       const opacity = element.opacity;
       if (element.type === 'text')
-        return `<text x="${element.x}" y="${element.y + element.fontSize}" font-family="${xml(element.fontFamily)}" font-size="${element.fontSize}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${xml(element.color)}" opacity="${opacity}" transform="${transform}">${xml(element.text)}</text>`;
+        return `<text x="${element.x}" y="${element.y + element.fontSize}" font-family="${xml(element.fontFamily)}" font-size="${element.fontSize}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${xml(element.color)}" opacity="${opacity}" transform="${transform}">${richText(element)}</text>`;
       if (element.type === 'line')
         return `<line x1="${element.x}" y1="${element.y}" x2="${element.x2}" y2="${element.y2}" stroke="${xml(element.stroke)}" stroke-width="${element.strokeWidth}" opacity="${opacity}" />`;
       if (element.type === 'image') {

@@ -1,6 +1,6 @@
 import type { SlideDocument, SlideTheme } from './types';
 
-export const CURRENT_SCHEMA_VERSION = 1 as const;
+export const CURRENT_SCHEMA_VERSION = 2 as const;
 
 export const DEFAULT_SLIDE_SIZE = {
   width: 13_333,
@@ -17,8 +17,8 @@ export const DEFAULT_SLIDE_THEME: SlideTheme = {
     accent: '#06B6D4'
   },
   fonts: {
-    heading: 'system-ui',
-    body: 'system-ui',
+    heading: 'IBM Plex Sans Variable',
+    body: 'IBM Plex Sans Variable',
     monospace: 'ui-monospace'
   }
 };
@@ -54,7 +54,7 @@ export function createSampleDocument(): SlideDocument {
             locked: false,
             hidden: false,
             text: 'SlAIdes',
-            fontFamily: 'system-ui',
+            fontFamily: 'IBM Plex Sans Variable',
             fontSize: 480,
             fontWeight: 700,
             fontStyle: 'normal',
@@ -64,7 +64,8 @@ export function createSampleDocument(): SlideDocument {
             lineHeight: 1.2,
             letterSpacing: 0,
             autoFit: 'none',
-            padding: { top: 0, right: 0, bottom: 0, left: 0 }
+            padding: { top: 0, right: 0, bottom: 0, left: 0 },
+            textStyles: []
           }
         ],
         notes: { text: '' },

@@ -13,6 +13,7 @@ use zip::{ZipArchive, ZipWriter};
 
 const MAX_ARCHIVE_SIZE: u64 = 512 * 1024 * 1024;
 const ARCHIVE_VERSION: u64 = 1;
+const CURRENT_SCHEMA_VERSION: u64 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,11 +80,11 @@ fn validate_json(document_json: &str, metadata_json: &str) -> Result<(), String>
         .map_err(|error| format!("invalid document.json: {error}"))?;
     let metadata: serde_json::Value = serde_json::from_str(metadata_json)
         .map_err(|error| format!("invalid metadata.json: {error}"))?;
-    if document
+    let document_schema = document
         .get("schemaVersion")
         .and_then(|value| value.as_u64())
-        != Some(1)
-    {
+        .ok_or("document schemaVersion is missing")?;
+    if !(1..=CURRENT_SCHEMA_VERSION).contains(&document_schema) {
         return Err("unsupported document schemaVersion".into());
     }
     if metadata.get("format").and_then(|value| value.as_str()) != Some("slaides")
@@ -94,11 +95,14 @@ fn validate_json(document_json: &str, metadata_json: &str) -> Result<(), String>
     {
         return Err("unsupported archive metadata".into());
     }
-    if metadata
+    let metadata_schema = metadata
         .get("schemaVersion")
         .and_then(|value| value.as_u64())
-        != Some(1)
-    {
+        .ok_or("metadata schemaVersion is missing")?;
+    if metadata_schema != document_schema {
+        return Err("document and metadata schemaVersion differ".into());
+    }
+    if !(1..=CURRENT_SCHEMA_VERSION).contains(&metadata_schema) {
         return Err("unsupported metadata schemaVersion".into());
     }
     Ok(())
@@ -413,7 +417,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_schema_and_missing_assets() {
-        assert!(validate_json(r#"{"schemaVersion":2}"#, &metadata()).is_err());
+        assert!(validate_json(r#"{"schemaVersion":3}"#, &metadata()).is_err());
 
         let path = test_path();
         let request = SaveProjectRequest {

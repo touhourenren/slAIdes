@@ -69,6 +69,20 @@ const baseElementShape = {
   metadata: z.record(z.string(), z.unknown()).optional()
 };
 
+export const TextStyleRangeSchema = z
+  .strictObject({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().positive(),
+    fontFamily: z.string().min(1).optional(),
+    fontSize: positiveNumber.optional(),
+    fontWeight: positiveNumber.optional(),
+    fontStyle: z.enum(['normal', 'italic']).optional(),
+    color: color.optional()
+  })
+  .refine((range) => range.end > range.start, {
+    message: 'Text style range end must be greater than start'
+  });
+
 export const TextElementSchema = z.strictObject({
   ...baseElementShape,
   type: z.literal('text'),
@@ -88,7 +102,8 @@ export const TextElementSchema = z.strictObject({
     right: nonNegativeNumber,
     bottom: nonNegativeNumber,
     left: nonNegativeNumber
-  })
+  }),
+  textStyles: z.array(TextStyleRangeSchema).optional()
 });
 
 export const ImageElementSchema = z.strictObject({

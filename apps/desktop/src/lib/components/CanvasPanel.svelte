@@ -2,14 +2,21 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { CanvasController, zoomOffsetAtPoint } from '@slaides/canvas-fabric';
+  import { Copy, ClipboardPaste, Scissors, Trash2 } from 'lucide-svelte';
   import {
     activeSlide,
     canvasTextEditingStore,
     closeHistoryGroup,
+    copySelected,
+    cutSelected,
+    deleteSelected,
     documentStore,
+    editorClipboardStore,
     patchElement,
+    pasteClipboardObjects,
     resolveAssetUrl,
     selectElements,
+    setTextSelection,
     selectedElementIds,
     zoomStore
   } from '../stores/editor';
@@ -22,6 +29,7 @@
   let offset = { x: 0, y: 0 };
   let gestureStartZoom = 1;
   let fittedWidth = 960;
+  let contextMenu: { x: number; y: number; hasTarget: boolean } | undefined;
 
   type WebKitGestureEvent = Event & {
     scale: number;
@@ -43,12 +51,24 @@
         else if (event.type === 'elementTextChanged')
           patchElement(
             event.elementId,
-            { text: event.text },
+            { text: event.text, textStyles: event.textStyles },
             {
               label: 'Edit text',
               mergeKey: `canvas-text:${event.elementId}`
             }
           );
+        else if (event.type === 'textSelectionChanged')
+          setTextSelection({
+            elementId: event.elementId,
+            start: event.start,
+            end: event.end
+          });
+        else if (event.type === 'contextMenuRequested')
+          contextMenu = {
+            x: Math.min(event.clientX, window.innerWidth - 190),
+            y: Math.min(event.clientY, window.innerHeight - 210),
+            hasTarget: Boolean(event.elementId)
+          };
         else {
           canvasTextEditingStore.set(event.editing);
           if (!event.editing)
@@ -179,6 +199,13 @@
   }
 </script>
 
+<svelte:window
+  onclick={() => (contextMenu = undefined)}
+  onkeydown={(event) => {
+    if (event.key === 'Escape') contextMenu = undefined;
+  }}
+/>
+
 <div
   bind:this={host}
   role="application"
@@ -203,6 +230,51 @@
     Two-finger pan · Pinch or Ctrl + wheel · {Math.round($zoomStore * 100)}%
   </div>
 </div>
+
+{#if contextMenu}
+  <div
+    class="canvas-context-menu"
+    style:left={`${contextMenu.x}px`}
+    style:top={`${contextMenu.y}px`}
+    role="menu"
+    tabindex="-1"
+  >
+    <button
+      role="menuitem"
+      disabled={!contextMenu.hasTarget}
+      onclick={() => {
+        copySelected();
+        contextMenu = undefined;
+      }}><Copy size={14} />Copy <kbd>⌘C</kbd></button
+    >
+    <button
+      role="menuitem"
+      disabled={!contextMenu.hasTarget}
+      onclick={() => {
+        cutSelected();
+        contextMenu = undefined;
+      }}><Scissors size={14} />Cut <kbd>⌘X</kbd></button
+    >
+    <button
+      role="menuitem"
+      disabled={$editorClipboardStore?.type !== 'objects'}
+      onclick={() => {
+        pasteClipboardObjects();
+        contextMenu = undefined;
+      }}><ClipboardPaste size={14} />Paste <kbd>⌘V</kbd></button
+    >
+    <div class="context-separator"></div>
+    <button
+      class="danger"
+      role="menuitem"
+      disabled={!contextMenu.hasTarget}
+      onclick={() => {
+        deleteSelected();
+        contextMenu = undefined;
+      }}><Trash2 size={14} />Delete <kbd>⌫</kbd></button
+    >
+  </div>
+{/if}
 
 <style>
   .canvas-host {
@@ -253,5 +325,48 @@
     padding: 6px 9px;
     color: var(--color-text-secondary);
     font-size: 11px;
+  }
+  .canvas-context-menu {
+    position: fixed;
+    z-index: 900;
+    width: 180px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    background: var(--color-panel-bg);
+    padding: 5px;
+    box-shadow: var(--material-shadow);
+  }
+  .canvas-context-menu button {
+    display: grid;
+    width: 100%;
+    min-height: 30px;
+    grid-template-columns: 18px 1fr auto;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--color-text-primary);
+    padding: 0 8px;
+    font-size: 12px;
+    text-align: left;
+  }
+  .canvas-context-menu button:hover:not(:disabled) {
+    background: var(--color-hover-bg);
+  }
+  .canvas-context-menu button:disabled {
+    opacity: 0.42;
+  }
+  .canvas-context-menu .danger {
+    color: var(--color-danger);
+  }
+  .canvas-context-menu kbd {
+    color: var(--color-text-muted);
+    font: inherit;
+  }
+  .context-separator {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--color-border-subtle);
   }
 </style>

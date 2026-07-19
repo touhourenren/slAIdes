@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 import {
   addNewSlide,
+  applyTextFormatting,
   canRedoStore,
   canUndoStore,
   closeHistoryGroup,
+  copySelected,
+  cutSelected,
   documentStore,
   deleteActiveSlide,
   disposeAssets,
@@ -13,10 +16,12 @@ import {
   historyStore,
   insertElement,
   insertImage,
+  pasteClipboardObjects,
   patchElement,
   patchSlideNotes,
   redo,
   resetEditorSession,
+  setTextSelection,
   undo
 } from './editor';
 
@@ -135,5 +140,55 @@ describe('editor history session', () => {
     );
     redo();
     expect(get(documentStore).assets).toHaveLength(1);
+  });
+
+  it('copies, cuts, and pastes selected objects as undoable actions', () => {
+    insertElement('shape');
+    const sourceId = get(editorSessionStore).selectedElementIds[0];
+    expect(copySelected()).toBe(true);
+    expect(pasteClipboardObjects()).toBe(true);
+    const pastedId = get(editorSessionStore).selectedElementIds[0];
+    expect(pastedId).not.toBe(sourceId);
+    expect(cutSelected()).toBe(true);
+    expect(
+      get(documentStore).slides[0].elements.some(
+        (element) => element.id === pastedId
+      )
+    ).toBe(false);
+    undo();
+    expect(
+      get(documentStore).slides[0].elements.some(
+        (element) => element.id === pastedId
+      )
+    ).toBe(true);
+  });
+
+  it('applies text formatting only to the active character selection', () => {
+    insertElement('text');
+    const elementId = get(editorSessionStore).selectedElementIds[0];
+    setTextSelection({ elementId, start: 0, end: 6 });
+    applyTextFormatting(elementId, {
+      fontFamily: 'Noto Sans JP Variable',
+      fontSize: 480,
+      fontStyle: 'italic',
+      color: '#ff0000'
+    });
+    const element = get(documentStore).slides[0].elements.find(
+      (candidate) => candidate.id === elementId
+    );
+    expect(element).toMatchObject({
+      type: 'text',
+      fontFamily: 'IBM Plex Sans Variable',
+      textStyles: [
+        {
+          start: 0,
+          end: 6,
+          fontFamily: 'Noto Sans JP Variable',
+          fontSize: 480,
+          fontStyle: 'italic',
+          color: '#ff0000'
+        }
+      ]
+    });
   });
 });

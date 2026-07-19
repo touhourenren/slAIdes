@@ -3,6 +3,7 @@ import { createSampleDocument } from '@slaides/slide-schema';
 import {
   addElement,
   addSlide,
+  applyTextStyleRange,
   clampCornerRadius,
   createElement,
   createHistoryState,
@@ -14,6 +15,9 @@ import {
   commitHistory,
   duplicateElements,
   moveElementLayer,
+  pasteElements,
+  pasteSlide,
+  rebaseTextStyleRanges,
   removeElement,
   removeSlide,
   reorderSlide,
@@ -44,10 +48,10 @@ describe('editor-core', () => {
       strokeWidth: 8
     });
   });
-  it('uses the platform system font for new text', () => {
+  it('uses IBM Plex Sans for new text', () => {
     expect(createElement('text')).toMatchObject({
       type: 'text',
-      fontFamily: 'system-ui',
+      fontFamily: 'IBM Plex Sans Variable',
       autoFit: 'none'
     });
   });
@@ -180,5 +184,53 @@ describe('editor-core', () => {
       y: source.y + 160,
       zIndex: 1
     });
+  });
+
+  it('applies and rebases character-level text styles', () => {
+    const styled = applyTextStyleRange([], 2, 6, {
+      fontFamily: 'Noto Sans JP Variable',
+      fontSize: 420,
+      color: '#ff0000'
+    });
+    expect(styled).toEqual([
+      {
+        start: 2,
+        end: 6,
+        fontFamily: 'Noto Sans JP Variable',
+        fontSize: 420,
+        color: '#ff0000'
+      }
+    ]);
+    expect(rebaseTextStyleRanges(styled, 'abcdefgh', 'abZZcdefgh')).toEqual([
+      {
+        start: 2,
+        end: 8,
+        fontFamily: 'Noto Sans JP Variable',
+        fontSize: 420,
+        color: '#ff0000'
+      }
+    ]);
+  });
+
+  it('pastes objects and slides with new identities', () => {
+    const original = createSampleDocument();
+    const source = original.slides[0].elements[0];
+    const objects = pasteElements(original, original.slides[0].id, [source], {
+      idFactory: () => '018f47a2-5b6c-7d8e-9f01-23456789abf0'
+    });
+    expect(objects.elementIds).toEqual([
+      '018f47a2-5b6c-7d8e-9f01-23456789abf0'
+    ]);
+    expect(objects.document.slides[0].elements[1]).toMatchObject({
+      x: source.x + 160,
+      y: source.y + 160
+    });
+    const slides = pasteSlide(original, original.slides[0], 1, {
+      id: '018f47a2-5b6c-7d8e-9f01-23456789abf1',
+      now: '2026-01-02T00:00:00.000Z'
+    });
+    expect(slides.document.slides).toHaveLength(2);
+    expect(slides.slideId).toBe('018f47a2-5b6c-7d8e-9f01-23456789abf1');
+    expect(slides.document.slides[1].elements[0].id).not.toBe(source.id);
   });
 });

@@ -126,3 +126,16 @@ it is not a document source of truth. Startup reopens saved tab paths and valid 
 archives, but initializes every Undo/Redo history as empty. Object URLs remain cached per tab and
 are revoked together when the tab or application closes. Persistent versions and branches remain
 Phase 6 responsibilities.
+
+## Rich text and editing clipboard
+
+Schema v2 keeps the text string as canonical content and stores character formatting as compact,
+grapheme-indexed override ranges. The Fabric adapter expands those ranges into its per-character
+runtime styles and compacts them again after direct editing. Caret metrics are measured in runs
+using each run's actual font declaration, and corner resizing scales both the base font and inline
+font sizes. Schema v1 archives are accepted and migrated by adding empty style ranges.
+
+Copy, cut, and paste use an application clipboard containing domain elements or a complete slide,
+never Fabric JSON. Paste assigns new identities, normalizes z-order, remaps image asset references,
+and commits once to Undo history. Canvas and slide-list context menus share the same transaction
+APIs as keyboard shortcuts and the native Edit menu.

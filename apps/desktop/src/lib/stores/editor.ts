@@ -2,9 +2,11 @@ import { derived, get, writable } from 'svelte/store';
 import {
   addElement,
   addSlide,
+  applyTextStyleRange,
   canRedo,
   canUndo,
   closeHistoryGroup as closeHistoryGroupState,
+  clearTextStyleProperties,
   commitHistory,
   createElement,
   createHistoryState,
@@ -12,6 +14,9 @@ import {
   duplicateElements,
   duplicateSlide,
   moveElementLayer,
+  pasteElements,
+  pasteSlide,
+  rebaseTextStyleRanges,
   redoHistory,
   removeElement,
   removeSlide,
@@ -24,8 +29,11 @@ import { createSampleDocument } from '@slaides/slide-schema';
 import type { HistoryState } from '@slaides/editor-core';
 import type {
   AssetReference,
+  Slide,
   SlideDocument,
-  SlideElement
+  SlideElement,
+  TextElement,
+  TextStyleAttributes
 } from '@slaides/slide-schema';
 
 export interface EditorSnapshot {
@@ -50,6 +58,25 @@ export interface EditorRuntimeState {
   zoom: number;
   assetUrls: Array<[string, string]>;
 }
+
+export interface TextSelectionState {
+  elementId: string;
+  start: number;
+  end: number;
+}
+
+export type EditorClipboard =
+  | {
+      type: 'objects';
+      elements: SlideElement[];
+      assets: Array<{ reference: AssetReference; objectUrl?: string }>;
+      pasteCount: number;
+    }
+  | {
+      type: 'slide';
+      slide: Slide;
+      assets: Array<{ reference: AssetReference; objectUrl?: string }>;
+    };
 
 const initialDocument = createSampleDocument();
 const initialSnapshot: EditorSnapshot = {
@@ -78,6 +105,8 @@ export const selectedElementIds = derived(
 );
 export const zoomStore = writable(1);
 export const canvasTextEditingStore = writable(false);
+export const textSelectionStore = writable<TextSelectionState | undefined>();
+export const editorClipboardStore = writable<EditorClipboard | undefined>();
 export const canUndoStore = derived(historyStore, ($history) =>
   canUndo($history)
 );
@@ -207,6 +236,7 @@ export function resetEditorSession(
   document: SlideDocument = createSampleDocument(),
   documentRevision = 0
 ): void {
+  textSelectionStore.set(undefined);
   const snapshot = normalizeSnapshot({
     document,
     activeSlideId: document.slides[0].id,
@@ -220,6 +250,7 @@ export function resetEditorSession(
 }
 
 export function selectSlide(slideId: string): void {
+  textSelectionStore.set(undefined);
   editorSessionStore.update((session) => {
     if (
       session.activeSlideId === slideId ||
@@ -237,6 +268,9 @@ export function selectElements(ids: string[]): void {
     );
     const validIds = new Set(slide?.elements.map((element) => element.id));
     const unique = [...new Set(ids.filter((id) => validIds.has(id)))];
+    const textSelection = get(textSelectionStore);
+    if (textSelection && !unique.includes(textSelection.elementId))
+      textSelectionStore.set(undefined);
     if (
       session.selectedElementIds.length === unique.length &&
       session.selectedElementIds.every((id) => unique.includes(id))
@@ -244,6 +278,10 @@ export function selectElements(ids: string[]): void {
       return session;
     return { ...session, selectedElementIds: unique };
   });
+}
+
+export function setTextSelection(selection?: TextSelectionState): void {
+  textSelectionStore.set(selection);
 }
 
 export const resolveAssetUrl = (asset: AssetReference) =>
@@ -268,6 +306,7 @@ export function captureEditorRuntime(): EditorRuntimeState {
 }
 
 export function restoreEditorRuntime(runtime: EditorRuntimeState): void {
+  textSelectionStore.set(undefined);
   editorSessionStore.set(runtime.session);
   historyStore.set(runtime.history);
   zoomStore.set(runtime.zoom);
@@ -394,6 +433,233 @@ export function duplicateSelected(): void {
       selectedElementIds: result.elementIds
     };
   });
+}
+
+function assetsForElements(
+  document: SlideDocument,
+  elements: SlideElement[]
+): Array<{ reference: AssetReference; objectUrl?: string }> {
+  const ids = new Set(
+    elements.flatMap((element) =>
+      element.type === 'image' ? [element.assetId] : []
+    )
+  );
+  return document.assets
+    .filter((asset) => ids.has(asset.id))
+    .map((reference) => ({
+      reference: structuredClone(reference),
+      objectUrl: assetUrls.get(reference.id)
+    }));
+}
+
+export function copySelected(): boolean {
+  const snapshot = get(editorSessionStore);
+  const selected = new Set(snapshot.selectedElementIds);
+  const slide = snapshot.document.slides.find(
+    (item) => item.id === snapshot.activeSlideId
+  );
+  const elements =
+    slide?.elements.filter((element) => selected.has(element.id)) ?? [];
+  if (!elements.length) return false;
+  editorClipboardStore.set({
+    type: 'objects',
+    elements: structuredClone(elements),
+    assets: assetsForElements(snapshot.document, elements),
+    pasteCount: 0
+  });
+  return true;
+}
+
+export function cutSelected(): boolean {
+  if (!copySelected()) return false;
+  const selected = get(editorSessionStore).selectedElementIds;
+  return commitEditorAction('Cut objects', (snapshot) => ({
+    ...snapshot,
+    document: removeElement(
+      snapshot.document,
+      snapshot.activeSlideId,
+      selected
+    ),
+    selectedElementIds: []
+  }));
+}
+
+function prepareClipboardAssets(
+  document: SlideDocument,
+  elements: SlideElement[],
+  assets: Array<{ reference: AssetReference; objectUrl?: string }>
+): { document: SlideDocument; elements: SlideElement[] } {
+  let nextDocument = document;
+  const remap = new Map<string, string>();
+  for (const entry of assets) {
+    const existing = nextDocument.assets.find(
+      (asset) => asset.hash === entry.reference.hash
+    );
+    const collides = nextDocument.assets.some(
+      (asset) =>
+        asset.id === entry.reference.id && asset.hash !== entry.reference.hash
+    );
+    const assetId =
+      existing?.id ?? (collides ? crypto.randomUUID() : entry.reference.id);
+    remap.set(entry.reference.id, assetId);
+    if (!existing) {
+      const reference = { ...entry.reference, id: assetId };
+      nextDocument = {
+        ...nextDocument,
+        assets: [...nextDocument.assets, reference]
+      };
+      if (entry.objectUrl) assetUrls.set(assetId, entry.objectUrl);
+    }
+  }
+  return {
+    document: nextDocument,
+    elements: elements.map((element) =>
+      element.type === 'image' && remap.has(element.assetId)
+        ? { ...element, assetId: remap.get(element.assetId)! }
+        : element
+    )
+  };
+}
+
+export function pasteClipboardObjects(): boolean {
+  const clipboard = get(editorClipboardStore);
+  if (!clipboard || clipboard.type !== 'objects') return false;
+  const pasted = commitEditorAction('Paste objects', (snapshot) => {
+    const prepared = prepareClipboardAssets(
+      snapshot.document,
+      clipboard.elements,
+      clipboard.assets
+    );
+    const result = pasteElements(
+      prepared.document,
+      snapshot.activeSlideId,
+      prepared.elements,
+      {
+        offsetX: 160 * (clipboard.pasteCount + 1),
+        offsetY: 160 * (clipboard.pasteCount + 1)
+      }
+    );
+    return {
+      ...snapshot,
+      document: result.document,
+      selectedElementIds: result.elementIds
+    };
+  });
+  if (pasted)
+    editorClipboardStore.set({
+      ...clipboard,
+      pasteCount: clipboard.pasteCount + 1
+    });
+  return pasted;
+}
+
+export function copySlide(slideId: string): boolean {
+  const snapshot = get(editorSessionStore);
+  const slide = snapshot.document.slides.find((item) => item.id === slideId);
+  if (!slide) return false;
+  editorClipboardStore.set({
+    type: 'slide',
+    slide: structuredClone(slide),
+    assets: assetsForElements(snapshot.document, slide.elements)
+  });
+  return true;
+}
+
+export function cutSlide(slideId: string): boolean {
+  const snapshot = get(editorSessionStore);
+  if (snapshot.document.slides.length <= 1 || !copySlide(slideId)) return false;
+  return commitEditorAction('Cut slide', (current) => {
+    const index = current.document.slides.findIndex(
+      (slide) => slide.id === slideId
+    );
+    const document = removeSlide(current.document, slideId);
+    const next = document.slides[Math.max(0, index - 1)] ?? document.slides[0];
+    return {
+      ...current,
+      document,
+      activeSlideId: next.id,
+      selectedElementIds: []
+    };
+  });
+}
+
+export function pasteClipboardSlide(afterSlideId?: string): boolean {
+  const clipboard = get(editorClipboardStore);
+  if (!clipboard || clipboard.type !== 'slide') return false;
+  return commitEditorAction('Paste slide', (snapshot) => {
+    const prepared = prepareClipboardAssets(
+      snapshot.document,
+      clipboard.slide.elements,
+      clipboard.assets
+    );
+    const source = { ...clipboard.slide, elements: prepared.elements };
+    const afterIndex = afterSlideId
+      ? prepared.document.slides.findIndex((slide) => slide.id === afterSlideId)
+      : prepared.document.slides.length - 1;
+    const result = pasteSlide(prepared.document, source, afterIndex + 1);
+    return {
+      ...snapshot,
+      document: result.document,
+      activeSlideId: result.slideId,
+      selectedElementIds: []
+    };
+  });
+}
+
+export function applyTextFormatting(
+  elementId: string,
+  changes: TextStyleAttributes
+): void {
+  const snapshot = get(editorSessionStore);
+  const element = snapshot.document.slides
+    .find((slide) => slide.id === snapshot.activeSlideId)
+    ?.elements.find((item) => item.id === elementId);
+  if (!element || element.type !== 'text') return;
+  const selection = get(textSelectionStore);
+  if (selection?.elementId === elementId && selection.end > selection.start) {
+    patchElement(
+      elementId,
+      {
+        textStyles: applyTextStyleRange(
+          element.textStyles ?? [],
+          selection.start,
+          selection.end,
+          changes
+        )
+      } as Partial<TextElement>,
+      { label: 'Format text' }
+    );
+    return;
+  }
+  const keys = Object.keys(changes) as Array<keyof TextStyleAttributes>;
+  patchElement(
+    elementId,
+    {
+      ...changes,
+      textStyles: clearTextStyleProperties(element.textStyles ?? [], keys)
+    } as Partial<TextElement>,
+    { label: 'Format text' }
+  );
+}
+
+export function patchTextContent(elementId: string, text: string): void {
+  const snapshot = get(editorSessionStore);
+  const element = snapshot.document.slides
+    .find((slide) => slide.id === snapshot.activeSlideId)
+    ?.elements.find((item) => item.id === elementId);
+  if (!element || element.type !== 'text' || element.text === text) return;
+  patchElement(
+    elementId,
+    {
+      text,
+      textStyles: rebaseTextStyleRanges(
+        element.textStyles ?? [],
+        element.text,
+        text
+      )
+    } as Partial<TextElement>,
+    { label: 'Edit text', mergeKey: `property:${elementId}:text` }
+  );
 }
 
 export function deleteSelected(): void {

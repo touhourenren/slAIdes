@@ -1,5 +1,12 @@
 <script lang="ts">
-  import type { AssetReference, Slide, SlideSize } from '@slaides/slide-schema';
+  import type {
+    AssetReference,
+    Slide,
+    SlideSize,
+    TextElement,
+    TextStyleAttributes
+  } from '@slaides/slide-schema';
+  import { splitTextGraphemes } from '@slaides/slide-schema';
   import { resolveAssetUrl } from '../stores/editor';
 
   export let slide: Slide;
@@ -16,6 +23,31 @@
       : fit === 'cover'
         ? 'xMidYMid slice'
         : 'none';
+
+  function textSegments(element: TextElement) {
+    const graphemes = splitTextGraphemes(element.text);
+    const segments: Array<{
+      text: string;
+      style: Required<TextStyleAttributes>;
+    }> = [];
+    for (let index = 0; index < graphemes.length; index++) {
+      const range = element.textStyles?.find(
+        (style) => style.start <= index && style.end > index
+      );
+      const style = {
+        fontFamily: range?.fontFamily ?? element.fontFamily,
+        fontSize: range?.fontSize ?? element.fontSize,
+        fontWeight: range?.fontWeight ?? element.fontWeight,
+        fontStyle: range?.fontStyle ?? element.fontStyle,
+        color: range?.color ?? element.color
+      };
+      const previous = segments.at(-1);
+      if (previous && JSON.stringify(previous.style) === JSON.stringify(style))
+        previous.text += graphemes[index];
+      else segments.push({ text: graphemes[index], style });
+    }
+    return segments;
+  }
 </script>
 
 <svg
@@ -58,7 +90,17 @@
                   ? 'flex-end'
                   : 'center'}
             >
-              {element.text}
+              <div class="thumbnail-text-content">
+                {#each textSegments(element) as segment, segmentIndex (segmentIndex)}
+                  <span
+                    style:font-family={segment.style.fontFamily}
+                    style:font-size={`${segment.style.fontSize}px`}
+                    style:font-weight={segment.style.fontWeight}
+                    style:font-style={segment.style.fontStyle}
+                    style:color={segment.style.color}>{segment.text}</span
+                  >
+                {/each}
+              </div>
             </div>
           </foreignObject>
         {:else if element.type === 'shape'}
@@ -136,6 +178,10 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+  }
+  .thumbnail-text-content {
+    width: 100%;
+    min-width: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }

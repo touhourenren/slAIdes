@@ -10,6 +10,9 @@ export interface NativeMenuActions {
   quit(): void;
   undo(): void;
   redo(): void;
+  cut(): void;
+  copy(): void;
+  paste(): void;
 }
 
 let installedMenu: Menu | undefined;
@@ -87,9 +90,24 @@ export async function installNativeMenu(
             action: actions.redo
           },
           { item: 'Separator' },
-          { item: 'Cut' },
-          { item: 'Copy' },
-          { item: 'Paste' },
+          {
+            id: 'cut-content',
+            text: 'Cut',
+            accelerator: 'CmdOrCtrl+X',
+            action: actions.cut
+          },
+          {
+            id: 'copy-content',
+            text: 'Copy',
+            accelerator: 'CmdOrCtrl+C',
+            action: actions.copy
+          },
+          {
+            id: 'paste-content',
+            text: 'Paste',
+            accelerator: 'CmdOrCtrl+V',
+            action: actions.paste
+          },
           { item: 'SelectAll' }
         ]
       }

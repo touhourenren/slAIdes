@@ -1,15 +1,32 @@
 <script lang="ts">
-  import type { ShapeElement, SlideElement } from '@slaides/slide-schema';
+  import type {
+    ShapeElement,
+    SlideElement,
+    TextStyleAttributes,
+    TextStyleRange
+  } from '@slaides/slide-schema';
   import { clampCornerRadius } from '@slaides/editor-core';
   import { ChevronUp } from 'lucide-svelte';
   import {
+    applyTextFormatting,
     closeHistoryGroup,
     patchElement,
-    selectedElements
+    patchTextContent,
+    selectedElements,
+    textSelectionStore
   } from '../stores/editor';
 
+  let selectedTextStyle: TextStyleRange | undefined;
   $: element =
     $selectedElements.length === 1 ? $selectedElements[0] : undefined;
+  $: selectedTextStyle =
+    element?.type === 'text' && $textSelectionStore?.elementId === element.id
+      ? element.textStyles?.find(
+          (style) =>
+            style.start <= $textSelectionStore!.start &&
+            style.end > $textSelectionStore!.start
+        )
+      : undefined;
 
   function update(changes: Partial<SlideElement>) {
     if (!element) return;
@@ -45,6 +62,22 @@
     if (Number.isFinite(parsed))
       update({ [key]: parsed } as Partial<SlideElement>);
   }
+  function format(changes: TextStyleAttributes) {
+    if (!element || element.type !== 'text') return;
+    applyTextFormatting(element.id, changes);
+  }
+  function formatNumber(key: 'fontSize' | 'fontWeight', rawValue: string) {
+    const value = Number(rawValue);
+    if (Number.isFinite(value) && value > 0) format({ [key]: value });
+  }
+
+  const textPresets = [
+    { label: 'Title', size: 640, weight: 700 },
+    { label: 'Heading', size: 480, weight: 650 },
+    { label: 'Subheading', size: 360, weight: 600 },
+    { label: 'Body', size: 260, weight: 400 },
+    { label: 'Caption', size: 180, weight: 400 }
+  ] as const;
   function changeShapeType(shapeType: ShapeElement['shapeType']) {
     if (!element || element.type !== 'shape') return;
     update({
@@ -135,23 +168,40 @@
     {#if element.type === 'text'}
       <section class="property-section">
         <header><span>Text</span><ChevronUp /></header>
+        {#if $textSelectionStore?.elementId === element.id && $textSelectionStore.end > $textSelectionStore.start}
+          <div class="selection-note">
+            Formatting {$textSelectionStore.end - $textSelectionStore.start}
+            selected characters
+          </div>
+        {/if}
         <textarea
           class="text-content"
           aria-label="Text content"
           value={element.text}
           oninput={(event) =>
-            update({
-              text: event.currentTarget.value
-            } as Partial<SlideElement>)}
+            patchTextContent(element.id, event.currentTarget.value)}
         ></textarea>
+        <div class="text-presets" aria-label="Text size presets">
+          {#each textPresets as preset (preset.label)}
+            <button
+              title={`${preset.label} · ${preset.size}`}
+              onclick={() =>
+                format({
+                  fontSize: preset.size,
+                  fontWeight: preset.weight
+                })}>{preset.label}</button
+            >
+          {/each}
+        </div>
         <div class="property-grid">
           <label class="span-two"
             ><span>Font</span><select
-              value={element.fontFamily}
+              value={selectedTextStyle?.fontFamily ?? element.fontFamily}
               onchange={(event) =>
-                update({
+                format({
                   fontFamily: event.currentTarget.value
-                } as Partial<SlideElement>)}
+                })}
+              ><option value="IBM Plex Sans Variable">IBM Plex Sans</option
               ><option value="system-ui">SF Pro (System)</option><option
                 value="ui-serif">New York (System)</option
               ><option value="ui-monospace">SF Mono (System)</option><option
@@ -164,15 +214,18 @@
             ><span>Size</span><input
               type="number"
               min="1"
-              value={element.fontSize}
-              oninput={(event) => number('fontSize', event.currentTarget.value)}
+              value={selectedTextStyle?.fontSize ?? element.fontSize}
+              oninput={(event) =>
+                formatNumber('fontSize', event.currentTarget.value)}
             /></label
           >
           <label
             ><span>Weight</span><select
-              value={String(element.fontWeight)}
+              value={String(
+                selectedTextStyle?.fontWeight ?? element.fontWeight
+              )}
               onchange={(event) =>
-                number('fontWeight', event.currentTarget.value)}
+                formatNumber('fontWeight', event.currentTarget.value)}
               ><option value="400">Regular</option><option value="500"
                 >Medium</option
               ><option value="600">Semibold</option><option value="700"
@@ -182,11 +235,11 @@
           >
           <label
             ><span>Style</span><select
-              value={element.fontStyle}
+              value={selectedTextStyle?.fontStyle ?? element.fontStyle}
               onchange={(event) =>
-                update({
+                format({
                   fontStyle: event.currentTarget.value as 'normal' | 'italic'
-                } as Partial<SlideElement>)}
+                })}
               ><option value="normal">Normal</option><option value="italic"
                 >Italic</option
               ></select
@@ -197,13 +250,17 @@
             <div class="color-control">
               <input
                 type="color"
-                value={element.color}
+                value={selectedTextStyle?.color ?? element.color}
                 aria-label="Text color"
                 oninput={(event) =>
-                  update({
+                  format({
                     color: event.currentTarget.value
-                  } as Partial<SlideElement>)}
-              /><code>{element.color.toUpperCase()}</code>
+                  })}
+              /><code
+                >{(
+                  selectedTextStyle?.color ?? element.color
+                ).toUpperCase()}</code
+              >
             </div></label
           >
           <label

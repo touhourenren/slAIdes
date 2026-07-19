@@ -14,3 +14,6 @@ const json = serializeSlideDocument(createSampleDocument());
 ```
 
 All external JSON must pass through `parseSlideDocument` or `deserializeSlideDocument` before use.
+Schema v2 adds optional grapheme-based `textStyles` ranges for mixed font family, size, weight,
+style, and color inside one text element. Schema v1 documents are migrated to v2 during parsing.
+Binary image data and renderer-specific objects remain outside the document.

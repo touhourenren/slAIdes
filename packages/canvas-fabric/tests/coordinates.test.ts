@@ -6,7 +6,9 @@ import {
   calculateTextResize,
   canvasToDomain,
   domainScale,
+  domainTextStylesToFabric,
   domainToCanvas,
+  fabricTextStylesToDomainFromStyles,
   normalizeLineTransform,
   normalizeObjectTransform,
   TEXTBOX_WRAP_BY_GRAPHEME,
@@ -68,6 +70,32 @@ describe('viewport zoom', () => {
 describe('textbox wrapping', () => {
   it('enables grapheme wrapping for unspaced Japanese text', () => {
     expect(TEXTBOX_WRAP_BY_GRAPHEME).toBe(true);
+  });
+});
+
+describe('rich-text character ranges', () => {
+  const scale = 0.1;
+
+  it('styles the first selected Japanese character', () => {
+    const styles = domainTextStylesToFabric(
+      [{ start: 0, end: 2, fontStyle: 'italic' }],
+      '日本語',
+      scale
+    );
+    expect(styles[0]?.[0]).toMatchObject({ fontStyle: 'italic' });
+    expect(styles[0]?.[1]).toMatchObject({ fontStyle: 'italic' });
+    expect(styles[0]?.[2]).toBeUndefined();
+  });
+
+  it('keeps selection indexes aligned after an explicit newline', () => {
+    const original = [{ start: 3, end: 5, fontStyle: 'italic' as const }];
+    const styles = domainTextStylesToFabric(original, 'AB\n日本語', scale);
+    expect(styles[1]?.[0]).toMatchObject({ fontStyle: 'italic' });
+    expect(styles[1]?.[1]).toMatchObject({ fontStyle: 'italic' });
+    expect(styles[1]?.[2]).toBeUndefined();
+    expect(
+      fabricTextStylesToDomainFromStyles(styles, 'AB\n日本語', scale)
+    ).toEqual(original);
   });
 });
 

@@ -13,9 +13,17 @@
     canvasTextEditingStore,
     canRedoStore,
     canUndoStore,
+    copySelected,
+    copySlide,
+    cutSelected,
+    cutSlide,
     deleteSelected,
     duplicateSelected,
+    editorClipboardStore,
+    editorSessionStore,
     insertImage,
+    pasteClipboardObjects,
+    pasteClipboardSlide,
     redo,
     undo
   } from '$lib/stores/editor';
@@ -37,6 +45,29 @@
   let fileInput: HTMLInputElement;
   let pageTitle = 'SlAIdes';
   const chooseImage = () => fileInput.click();
+
+  const slideContextActive = () =>
+    document.activeElement?.closest('.slide-sidebar') !== null;
+  const copyCurrent = () => {
+    if (get(canvasTextEditingStore)) return document.execCommand('copy');
+    const session = get(editorSessionStore);
+    return !slideContextActive() && session.selectedElementIds.length
+      ? copySelected()
+      : copySlide(session.activeSlideId);
+  };
+  const cutCurrent = () => {
+    if (get(canvasTextEditingStore)) return document.execCommand('cut');
+    const session = get(editorSessionStore);
+    return !slideContextActive() && session.selectedElementIds.length
+      ? cutSelected()
+      : cutSlide(session.activeSlideId);
+  };
+  const pasteCurrent = () => {
+    if (get(canvasTextEditingStore)) return document.execCommand('paste');
+    return get(editorClipboardStore)?.type === 'slide'
+      ? pasteClipboardSlide(get(editorSessionStore).activeSlideId)
+      : pasteClipboardObjects();
+  };
 
   onMount(() => {
     void initializeWorkspace();
@@ -71,7 +102,10 @@
         },
         redo: () => {
           if (get(canRedoStore)) redo();
-        }
+        },
+        cut: cutCurrent,
+        copy: copyCurrent,
+        paste: pasteCurrent
       });
       void getCurrentWindow()
         .onCloseRequested(async (event) => {
@@ -131,6 +165,21 @@
       if (!isEditingField && modifier && event.key.toLowerCase() === 'd') {
         event.preventDefault();
         duplicateSelected();
+        return;
+      }
+      if (!isEditingField && modifier && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        copyCurrent();
+        return;
+      }
+      if (!isEditingField && modifier && event.key.toLowerCase() === 'x') {
+        event.preventDefault();
+        cutCurrent();
+        return;
+      }
+      if (!isEditingField && modifier && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        pasteCurrent();
         return;
       }
       if (
