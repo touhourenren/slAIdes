@@ -32,6 +32,7 @@ export interface EditorSnapshot {
   document: SlideDocument;
   activeSlideId: string;
   selectedElementIds: string[];
+  documentRevision: number;
 }
 
 export interface EditorActionOptions {
@@ -43,12 +44,21 @@ export interface PatchElementOptions extends EditorActionOptions {
   label?: string;
 }
 
+export interface EditorRuntimeState {
+  session: EditorSnapshot;
+  history: HistoryState<EditorSnapshot>;
+  zoom: number;
+  assetUrls: Array<[string, string]>;
+}
+
 const initialDocument = createSampleDocument();
 const initialSnapshot: EditorSnapshot = {
   document: initialDocument,
   activeSlideId: initialDocument.slides[0].id,
-  selectedElementIds: []
+  selectedElementIds: [],
+  documentRevision: 0
 };
+let nextDocumentRevision = 1;
 
 export const editorSessionStore = writable<EditorSnapshot>(initialSnapshot);
 export const historyStore = writable<HistoryState<EditorSnapshot>>(
@@ -153,7 +163,8 @@ export function commitEditorAction(
   options: EditorActionOptions = {}
 ): boolean {
   const before = get(editorSessionStore);
-  const after = normalizeSnapshot(updater(before));
+  const updated = normalizeSnapshot(updater(before));
+  const after = { ...updated, documentRevision: nextDocumentRevision++ };
   if (Object.is(before.document, after.document)) return false;
   const history = commitHistory(get(historyStore), before, after, {
     label,
@@ -193,12 +204,14 @@ export function redo(): void {
 }
 
 export function resetEditorSession(
-  document: SlideDocument = createSampleDocument()
+  document: SlideDocument = createSampleDocument(),
+  documentRevision = 0
 ): void {
   const snapshot = normalizeSnapshot({
     document,
     activeSlideId: document.slides[0].id,
-    selectedElementIds: []
+    selectedElementIds: [],
+    documentRevision
   });
   editorSessionStore.set(snapshot);
   const history = createHistoryState<EditorSnapshot>(100);
@@ -236,9 +249,36 @@ export function selectElements(ids: string[]): void {
 export const resolveAssetUrl = (asset: AssetReference) =>
   assetUrls.get(asset.id);
 
+export function captureAssetUrls(): Array<[string, string]> {
+  return [...assetUrls.entries()];
+}
+
+export function restoreAssetUrls(entries: Array<[string, string]>): void {
+  assetUrls.clear();
+  for (const [assetId, url] of entries) assetUrls.set(assetId, url);
+}
+
+export function captureEditorRuntime(): EditorRuntimeState {
+  return {
+    session: get(editorSessionStore),
+    history: get(historyStore),
+    zoom: get(zoomStore),
+    assetUrls: captureAssetUrls()
+  };
+}
+
+export function restoreEditorRuntime(runtime: EditorRuntimeState): void {
+  editorSessionStore.set(runtime.session);
+  historyStore.set(runtime.history);
+  zoomStore.set(runtime.zoom);
+  canvasTextEditingStore.set(false);
+  restoreAssetUrls(runtime.assetUrls);
+}
+
 export function addNewSlide(): void {
   const slide = createSlide();
   commitEditorAction('Add slide', (snapshot) => ({
+    ...snapshot,
     document: addSlide(snapshot.document, slide),
     activeSlideId: slide.id,
     selectedElementIds: []
@@ -252,6 +292,7 @@ export function duplicateActiveSlide(): void {
       (slide) => slide.id === snapshot.activeSlideId
     );
     return {
+      ...snapshot,
       document,
       activeSlideId: document.slides[index + 1]?.id ?? snapshot.activeSlideId,
       selectedElementIds: []
@@ -267,6 +308,7 @@ export function deleteActiveSlide(): void {
     const document = removeSlide(snapshot.document, snapshot.activeSlideId);
     const next = document.slides[Math.max(0, index - 1)] ?? document.slides[0];
     return {
+      ...snapshot,
       document,
       activeSlideId: next.id,
       selectedElementIds: []
@@ -293,6 +335,7 @@ export function insertElement(
       cornerRadius: shapeType === 'rounded-rectangle' ? 220 : undefined
     };
   commitEditorAction(`Add ${type}`, (snapshot) => ({
+    ...snapshot,
     document: addElement(snapshot.document, snapshot.activeSlideId, element),
     activeSlideId: snapshot.activeSlideId,
     selectedElementIds: [element.id]
@@ -419,7 +462,7 @@ export async function insertImage(file: File): Promise<void> {
         hash,
         filename: file.name,
         mimeType: file.type || 'application/octet-stream',
-        localPath: `session://${assetId}/${file.name}`,
+        localPath: `assets/${hash}.${file.name.split('.').pop()?.toLowerCase() || 'bin'}`,
         createdAt: new Date().toISOString()
       };
   const element = createElement('image', { assetId });
@@ -428,6 +471,7 @@ export async function insertImage(file: File): Promise<void> {
       ? { ...snapshot.document, assets: [...snapshot.document.assets, asset] }
       : snapshot.document;
     return {
+      ...snapshot,
       document: addElement(withAsset, snapshot.activeSlideId, element),
       activeSlideId: snapshot.activeSlideId,
       selectedElementIds: [element.id]

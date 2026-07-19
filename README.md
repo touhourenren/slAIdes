@@ -1,8 +1,8 @@
 # SlAIdes
 
 SlAIdes is a desktop slide editor built with Tauri 2, SvelteKit, TypeScript, and Fabric.js.
-The current implementation covers the project/domain foundation, the in-memory canvas editor, and
-Phase 4 session Undo/Redo history.
+The current implementation covers the project/domain foundation, canvas editor, Phase 4 session
+history, and Phase 5 local `.slaides` persistence with a multi-document workspace.
 
 ## Requirements
 
@@ -21,6 +21,10 @@ pnpm tauri:dev
 ```
 
 Run `pnpm lint`, `pnpm build`, and the `rust:*` scripts before submitting changes.
+
+Use `Cmd/Ctrl + N`, `O`, `S`, `Shift + S`, and `W` for New, Open, Save, Save As, and Close Tab.
+Formal project files are changed only by Save. Two seconds after an edit, SlAIdes writes a separate
+recovery archive; this does not clear the tab's dirty state.
 
 ## Workspace
 

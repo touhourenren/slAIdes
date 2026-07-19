@@ -93,3 +93,36 @@ Session image Object URLs are retained while referenced by the current snapshot 
 stack, then revoked when unreachable. History remains memory-only: `.slaides` archives, autosave,
 recovery, recent files, and SQLite belong to Phase 5, while long-lived version history belongs to
 Phase 6.
+
+## Phase 5 local persistence and workspace
+
+Each workspace tab owns its `SlideDocument`, memory-only history, editor view state, revision
+counters, save metadata, and asset URL cache. Switching tabs projects that tab into the active
+editor stores and captures the previous tab first. View-only state such as selection, zoom,
+viewport, tool, and inspector tab is separate from the canonical document and does not affect the
+dirty state.
+
+Document revisions identify committed document states. A tab is dirty when its current revision
+differs from the last formally saved revision; Undo can therefore return a tab to clean. Formal
+saves also calculate a recursively key-sorted canonical JSON SHA-256 hash for integrity and the
+project index. A save operates on a fixed document/revision snapshot, so edits made while I/O is in
+progress remain dirty after that save completes.
+
+`.slaides` files are ZIP archives containing required `document.json`, `metadata.json`, and every
+currently referenced `assets/<sha256>.<extension>` entry. `archiveVersion` describes the container,
+while `schemaVersion` describes the domain JSON. Optional 320×180 PNG thumbnails are derived data;
+failure to generate one produces a warning rather than failing the save. Rust rejects unsafe or
+duplicate paths, unsupported versions, expansion beyond the configured limit, missing assets, and
+asset hash mismatches before validated JSON is passed to the existing Zod boundary.
+
+Manual Save writes a temporary archive in the destination directory, flushes and syncs it,
+re-opens it for verification, moves an existing file to a backup, then renames the verified file
+into place. Rename is retried briefly for Windows file-lock races. Autosave never follows this path
+to the formal file: after two idle seconds it writes a separate recovery archive in App Data.
+Successful formal save or an explicit Don't Save removes recovery data.
+
+SQLite stores only the project/recent index, workspace layout settings, and recovery-draft index;
+it is not a document source of truth. Startup reopens saved tab paths and valid ready recovery
+archives, but initializes every Undo/Redo history as empty. Object URLs remain cached per tab and
+are revoked together when the tab or application closes. Persistent versions and branches remain
+Phase 6 responsibilities.

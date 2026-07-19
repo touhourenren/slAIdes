@@ -1,37 +1,70 @@
 <script lang="ts">
-  import { ChevronDown, Cloud, File, Play, Save, Share2 } from 'lucide-svelte';
+  import { ChevronDown, Play, Save, Share2 } from 'lucide-svelte';
+  import {
+    newDocumentTab,
+    openDocument,
+    openDocumentTab,
+    recentProjectsStore,
+    saveActiveTab,
+    saveTabAs,
+    workspaceStore
+  } from '../stores/workspace';
   let fileMenu = false;
+  $: activeTab = $workspaceStore.tabs.find(
+    (tab) => tab.id === $workspaceStore.activeTabId
+  );
 </script>
 
 <header class="app-header">
-  <div class="header-document">
+  <div class="app-menu-bar">
     <span class="wordmark">Sl<span>AI</span>des</span>
     <span class="header-divider"></span>
-    <button class="deck-title"
-      >Untitled presentation <ChevronDown size={14} /></button
-    >
-    <span class="save-state"><Cloud size={15} /> Session</span>
-  </div>
-
-  <nav class="document-tools" aria-label="Document commands">
     <div class="file-popover">
       <button
         class="file-trigger"
         aria-expanded={fileMenu}
         onclick={() => (fileMenu = !fileMenu)}
-        ><File size={16} /> File <ChevronDown size={13} /></button
+        >File <ChevronDown size={12} /></button
       >
       {#if fileMenu}
         <div class="file-menu">
-          <button disabled title="Local save · Phase 5"
-            >New <span>Phase 5</span></button
+          <button
+            onclick={() => {
+              fileMenu = false;
+              newDocumentTab();
+            }}>New <span>⌘N</span></button
           >
-          <button disabled title="Local save · Phase 5"
-            >Open… <span>Phase 5</span></button
+          <button
+            onclick={() => {
+              fileMenu = false;
+              void openDocument();
+            }}>Open… <span>⌘O</span></button
           >
-          <button disabled title="Local save · Phase 5"
-            >Save As… <span>Phase 5</span></button
+          <button
+            onclick={() => {
+              fileMenu = false;
+              void saveActiveTab();
+            }}>Save <span>⌘S</span></button
           >
+          <button
+            onclick={() => {
+              fileMenu = false;
+              if (activeTab) void saveTabAs(activeTab.id);
+            }}>Save As… <span>⇧⌘S</span></button
+          >
+          {#if $recentProjectsStore.length}
+            <div class="menu-separator"></div>
+            <span class="file-menu-label">Open Recent</span>
+            {#each $recentProjectsStore.slice(0, 5) as project (project.path)}
+              <button
+                title={project.path}
+                onclick={() => {
+                  fileMenu = false;
+                  void openDocumentTab(project.path);
+                }}>{project.title}</button
+              >
+            {/each}
+          {/if}
           <div class="menu-separator"></div>
           <button disabled title="Export · Phase 7"
             >Export… <span>Phase 7</span></button
@@ -41,22 +74,21 @@
     </div>
     <button
       class="save-command"
-      disabled
-      title="Local save · Phase 5"
+      disabled={!activeTab || activeTab.saveState === 'saving'}
+      title="Save"
       aria-label="Save"
+      onclick={() => void saveActiveTab()}
     >
       <Save size={17} />
     </button>
-  </nav>
+  </div>
 
   <div class="header-actions">
-    <button class="action-pill" disabled title="Phase 7"
-      ><Play size={15} /> Present <ChevronDown size={13} /></button
+    <button class="header-action" disabled title="Phase 7"
+      ><Play size={15} /> Present</button
     >
-    <button class="action-pill" disabled title="Future phase"
+    <button class="header-action" disabled title="Future phase"
       ><Share2 size={15} /> Share</button
     >
-    <button class="avatar" aria-label="User menu">S</button>
-    <ChevronDown class="user-chevron" size={14} />
   </div>
 </header>
