@@ -17,8 +17,8 @@ export const DEFAULT_SLIDE_THEME: SlideTheme = {
     accent: '#06B6D4'
   },
   fonts: {
-    heading: 'Inter',
-    body: 'Inter',
+    heading: 'system-ui',
+    body: 'system-ui',
     monospace: 'ui-monospace'
   }
 };
@@ -54,7 +54,7 @@ export function createSampleDocument(): SlideDocument {
             locked: false,
             hidden: false,
             text: 'SlAIdes',
-            fontFamily: 'Inter',
+            fontFamily: 'system-ui',
             fontSize: 480,
             fontWeight: 700,
             fontStyle: 'normal',
@@ -63,7 +63,7 @@ export function createSampleDocument(): SlideDocument {
             verticalAlign: 'middle',
             lineHeight: 1.2,
             letterSpacing: 0,
-            autoFit: 'shrink',
+            autoFit: 'none',
             padding: { top: 0, right: 0, bottom: 0, left: 0 }
           }
         ],

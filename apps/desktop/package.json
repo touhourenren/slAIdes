@@ -12,7 +12,13 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@slaides/slide-schema": "workspace:*"
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/noto-sans-jp": "^5.2.10",
+    "@slaides/canvas-fabric": "workspace:*",
+    "@slaides/editor-core": "workspace:*",
+    "@slaides/slide-schema": "workspace:*",
+    "fabric": "^7.0.0",
+    "lucide-svelte": "^0.468.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.0",

@@ -43,10 +43,11 @@ function documentWithAllElementTypes() {
       ...baseElement,
       id: ids.shape,
       type: 'shape',
-      shapeType: 'rectangle',
+      shapeType: 'rounded-rectangle',
       fill: '#FFFFFF',
       stroke: '#000000',
-      strokeWidth: 1
+      strokeWidth: 1,
+      cornerRadius: 20
     },
     {
       ...baseElement,
@@ -82,8 +83,13 @@ function documentWithAllElementTypes() {
 
 describe('SlideDocumentSchema', () => {
   it('validates a sample document containing all element types', () => {
-    const result = SlideDocumentSchema.safeParse(documentWithAllElementTypes());
+    const document = documentWithAllElementTypes();
+    const result = SlideDocumentSchema.safeParse(document);
     expect(result.success).toBe(true);
+    expect(document.slides[0]?.elements[0]).toMatchObject({
+      type: 'text',
+      autoFit: 'none'
+    });
   });
 
   it.each([

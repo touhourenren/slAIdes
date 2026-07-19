@@ -59,3 +59,20 @@ window permissions and no infrastructure plugins.
 Phase 3 should add an `editor-core` application package and a `canvas-fabric` infrastructure
 package. The adapter will accept domain elements and emit normalized changes; it must not leak
 Fabric types into `slide-schema` or make the renderer responsible for document history.
+
+## Phase 3 editor architecture
+
+Phase 3 adds `editor-core` as the infrastructure-independent application layer and
+`canvas-fabric` as a rendering adapter. UI and normalized canvas events call immutable editor-core
+operations; the resulting `SlideDocument` is then projected back onto Fabric.js. Fabric objects
+carry only their domain element ID and are never serialized.
+
+The desktop workspace uses a fixed three-column studio layout: a vertical Slides rail, the central
+document surface, and a tabbed Design/Layers/AI inspector. Panels are intentionally not dockable,
+so the editing surface remains predictable and no workspace layout is persisted. Session image
+Object URLs are resolved outside the domain and revoked when the editor closes.
+
+Within an active slide, `CanvasController` reconciles domain changes onto existing Fabric objects.
+Only a slide change replaces the canvas contents. Programmatic selection changes are silent, while
+user selection, completed transforms, and text edits emit normalized events back to the document
+store. This preserves selection, text-editing focus, and object identity across property updates.
